@@ -1,0 +1,220 @@
+{
+  "flow_name": "example",
+  "started_at": 1758102320.0778017,
+  "finished_at": 1758102320.788525,
+  "events": [
+    {
+      "index": 0,
+      "node_id": "start",
+      "status": "success",
+      "predecessor": null,
+      "started_at": 1758102320.078302,
+      "finished_at": 1758102320.1299474,
+      "duration": 0.05148400002508424,
+      "node_input": {
+        "data": {
+          "number": 4
+        },
+        "metadata": {},
+        "predecessor": null
+      },
+      "node_output": {
+        "status": "success",
+        "data": {
+          "number": 4,
+          "invocations": 1
+        },
+        "metadata": {
+          "duration": 0.05148400002508424,
+          "node_id": "start",
+          "global_state": true,
+          "executor": "inline"
+        }
+      },
+      "successors": [
+        "branch"
+      ]
+    },
+    {
+      "index": 1,
+      "node_id": "branch",
+      "status": "even",
+      "predecessor": "start",
+      "started_at": 1758102320.1299474,
+      "finished_at": 1758102320.1304476,
+      "duration": 0.0002893999917432666,
+      "node_input": {
+        "data": {
+          "number": 4,
+          "invocations": 1
+        },
+        "metadata": {
+          "duration": 0.05148400002508424,
+          "node_id": "start",
+          "global_state": true,
+          "executor": "inline"
+        },
+        "predecessor": "start"
+      },
+      "node_output": {
+        "status": "even",
+        "data": {
+          "number": 4,
+          "invocations": 1,
+          "parity": "even"
+        },
+        "metadata": {
+          "duration": 0.0002893999917432666,
+          "node_id": "branch",
+          "global_state": true,
+          "executor": "inline",
+          "predecessor": "start"
+        }
+      },
+      "successors": [
+        "process"
+      ]
+    },
+    {
+      "index": 2,
+      "node_id": "process",
+      "status": "success",
+      "predecessor": "branch",
+      "started_at": 1758102320.1304476,
+      "finished_at": 1758102320.246446,
+      "duration": 0.115707899996778,
+      "node_input": {
+        "data": {
+          "number": 4,
+          "invocations": 1,
+          "parity": "even"
+        },
+        "metadata": {
+          "duration": 0.0002893999917432666,
+          "node_id": "branch",
+          "global_state": true,
+          "executor": "inline",
+          "predecessor": "start"
+        },
+        "predecessor": "branch"
+      },
+      "node_output": {
+        "status": "success",
+        "data": {
+          "number": 4,
+          "invocations": 1,
+          "parity": "even",
+          "total": 10
+        },
+        "metadata": {
+          "duration": 0.115707899996778,
+          "node_id": "process",
+          "global_state": true,
+          "executor": "process",
+          "predecessor": "branch"
+        }
+      },
+      "successors": [
+        "container"
+      ]
+    },
+    {
+      "index": 3,
+      "node_id": "container",
+      "status": "success",
+      "predecessor": "process",
+      "started_at": 1758102320.246446,
+      "finished_at": 1758102320.788025,
+      "duration": 0.5412899000220932,
+      "node_input": {
+        "data": {
+          "number": 4,
+          "invocations": 1,
+          "parity": "even",
+          "total": 10
+        },
+        "metadata": {
+          "duration": 0.115707899996778,
+          "node_id": "process",
+          "global_state": true,
+          "executor": "process",
+          "predecessor": "branch"
+        },
+        "predecessor": "process"
+      },
+      "node_output": {
+        "status": "success",
+        "data": {
+          "docker_processed": true
+        },
+        "metadata": {
+          "handled_at": 1758102320.5179975,
+          "handler": "examples/docker-node/handler.py",
+          "duration": 0.5412899000220932,
+          "node_id": "container",
+          "global_state": false,
+          "executor": "docker",
+          "predecessor": "process"
+        }
+      },
+      "successors": [
+        "final"
+      ]
+    },
+    {
+      "index": 4,
+      "node_id": "final",
+      "status": "success",
+      "predecessor": "container",
+      "started_at": 1758102320.788025,
+      "finished_at": 1758102320.788525,
+      "duration": 0.000524200004292652,
+      "node_input": {
+        "data": {
+          "docker_processed": true
+        },
+        "metadata": {
+          "handled_at": 1758102320.5179975,
+          "handler": "examples/docker-node/handler.py",
+          "duration": 0.5412899000220932,
+          "node_id": "container",
+          "global_state": false,
+          "executor": "docker",
+          "predecessor": "process"
+        },
+        "predecessor": "container"
+      },
+      "node_output": {
+        "status": "success",
+        "data": {
+          "input": {
+            "docker_processed": true
+          },
+          "metadata": {
+            "handled_at": 1758102320.5179975,
+            "handler": "examples/docker-node/handler.py",
+            "duration": 0.5412899000220932,
+            "node_id": "container",
+            "global_state": false,
+            "executor": "docker",
+            "predecessor": "process"
+          },
+          "state": {
+            "start_invocations": 1,
+            "last_payload": {
+              "number": 4
+            }
+          }
+        },
+        "metadata": {
+          "duration": 0.000524200004292652,
+          "node_id": "final",
+          "global_state": true,
+          "executor": "inline",
+          "predecessor": "container"
+        }
+      },
+      "successors": []
+    }
+  ]
+}

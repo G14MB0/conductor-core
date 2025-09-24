@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  conductor:
+    image: your-dockerhub-namespace/conductor:latest
+    restart: unless-stopped
+    environment:
+      CONDUCTOR_GLOBAL_CONFIG: /etc/conductor/global.json
+      # CONDUCTOR_GLOBAL_CONFIG_JSON: |-
+      #   {"dependencies": ["boto3>=1.34"], "code_locations": {"nodes": {"type": "git", "url": "https://github.com/acme/conductor-nodes.git"}}}
+      # CONDUCTOR_PIP_EXTRA_ARGS: "--index-url=https://pypi.your-company/internal/simple"
+    volumes:
+      - ./config:/etc/conductor:ro
+      - conductor-cache:/root/.conductor
+    command:
+      - run
+      - --flow
+      - flows://order-routing.json
+      - --payload-file
+      - payloads://latest.json
+
+volumes:
+  conductor-cache:

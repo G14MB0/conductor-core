@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "conductor-core"
+version = "0.1.1"
+description = "Asynchronous flow executor with optional orchestration helpers."
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.9"
+authors = [{ name = "Gianmaria Castaldini" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+]
+keywords = ["workflow", "async", "orchestration", "automation"]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/G14MB0/conductor"
+Repository = "https://github.com/G14MB0/conductor"
+Documentation = "https://github.com/G14MB0/conductor/tree/main/docs"
+"Bug Tracker" = "https://github.com/G14MB0/conductor/issues"
+
+[project.scripts]
+conductor = "conductor.cli:main"
+
+[project.optional-dependencies]
+orchestrator = ["croniter>=1.3.14"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["conductor*"]
+exclude = ["examples*"]

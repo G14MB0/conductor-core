@@ -1,0 +1,18 @@
+{
+  "env": {
+    "EXAMPLE_FLAG": "enabled"
+  },
+  "shared_state": {
+    "start_invocations": 0
+  },
+  "remote_logging": {
+    "target": "http://logging.example.com/ingest",
+    "method": "POST",
+    "enabled": false
+  },
+  "container_registries": [
+    "docker.io"
+  ],
+  "process_pool_size": 2,
+  "max_concurrency": 4
+}
