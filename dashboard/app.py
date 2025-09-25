@@ -1,10 +1,10 @@
-﻿"""Streamlit entrypoint for the Conductor operations dashboard."""
+"""Streamlit entrypoint for the Conductor operations dashboard."""
 from __future__ import annotations
 
 import streamlit as st
 
 from dashboard import state
-from dashboard.pages import designer, flows, overview, schedules, settings
+from dashboard.pages import deployment, operations, settings
 
 
 def main() -> None:
@@ -12,11 +12,9 @@ def main() -> None:
     runtime = state.get_runtime()
 
     pages = {
-        "Monitoraggio": lambda: overview.render(runtime),
-        "Flow registrati": lambda: flows.render(runtime),
-        "Scheduler": lambda: schedules.render(runtime),
-        "Flow Designer": lambda: designer.render(runtime),
-        "Global settings": settings.render,
+        "Deployment": lambda: deployment.render(runtime),
+        "Operazioni": lambda: operations.render(runtime),
+        "Impostazioni": settings.render,
     }
 
     with st.sidebar:
@@ -25,7 +23,7 @@ def main() -> None:
         runs_snapshot = runtime.runs()
         st.metric("Flow registrati", len(flows_registered))
         st.metric("Esecuzioni attive", len(runs_snapshot["active"]))
-        if st.button("Aggiorna"):
+        if st.button("Aggiorna dati"):
             st.rerun()
         st.divider()
         selection = st.radio("Navigazione", list(pages.keys()))

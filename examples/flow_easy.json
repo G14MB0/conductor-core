@@ -1,0 +1,52 @@
+{
+  "name": "example",
+  "description": "Sample flow showing inline, process, and container nodes",
+  "start": [
+    "start"
+  ],
+  "nodes": [
+    {
+      "id": "start",
+      "name": "Starter",
+      "executor": "inline",
+      "callable": "examples.flow_functions:starter",
+      "transitions": {
+        "success": [
+          "branch"
+        ]
+      }
+    },
+    {
+      "id": "branch",
+      "name": "Branch",
+      "executor": "inline",
+      "callable": "examples.flow_functions:branching",
+      "transitions": {
+        "even": [
+          "process"
+        ],
+        "odd": [
+          "final"
+        ]
+      }
+    },
+    {
+      "id": "process",
+      "name": "Process Worker",
+      "executor": "process",
+      "callable": "examples.flow_functions:intensive",
+      "transitions": {
+        "success": [
+          "final"
+        ]
+      }
+    },
+    {
+      "id": "final",
+      "name": "Finalizer",
+      "executor": "inline",
+      "callable": "examples.flow_functions:finalizer",
+      "transitions": {}
+    }
+  ]
+}

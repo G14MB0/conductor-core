@@ -1,4 +1,5 @@
-﻿"""Page registry for the dashboard."""
-from . import designer, flows, overview, schedules, settings
+"""Page registry for the dashboard."""
+from . import deployment, operations, settings
 
-__all__ = ["designer", "flows", "overview", "schedules", "settings"]
+__all__ = ["deployment", "operations", "settings"]
+

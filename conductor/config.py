@@ -3,6 +3,7 @@ from __future__ import annotations
 
 """Configuration models and helpers for conductor flows."""
 
+import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
@@ -383,6 +384,64 @@ class FlowConfig:
 
     def __iter__(self):  # pragma: no cover - convenience helper
         return iter(self.nodes.values())
+
+
+
+@dataclass
+class FlowDeployment:
+    """Couples a flow definition with its flow-specific runtime configuration."""
+
+    flow: FlowConfig
+    global_config: GlobalConfig
+    name: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def resolved_name(self) -> str:
+        """Return the canonical name for this deployment."""
+
+        if self.name and self.name.strip():
+            return self.name.strip()
+        if self.flow.name and self.flow.name.strip():
+            return self.flow.name.strip()
+        return 'flow'
+
+    def normalized(self, *, name: Optional[str] = None) -> "FlowDeployment":
+        """Return a detached copy with a concrete name assigned."""
+
+        resolved_name = name or self.resolved_name()
+        clone = FlowDeployment(
+            flow=copy.deepcopy(self.flow),
+            global_config=copy.deepcopy(self.global_config),
+            name=resolved_name,
+            metadata=copy.deepcopy(self.metadata),
+        )
+        return clone
+
+    @classmethod
+    def from_components(
+        cls,
+        flow: FlowConfig,
+        *,
+        global_config: Optional[GlobalConfig] = None,
+        name: Optional[str] = None,
+        resource_locations: Optional[Mapping[str, RepositoryLocation]] = None,
+        code_locations: Optional[Mapping[str, RepositoryLocation]] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> "FlowDeployment":
+        """Build a deployment from the provided parts, copying data defensively."""
+
+        base = copy.deepcopy(global_config) if global_config is not None else GlobalConfig.from_mapping({})
+        if resource_locations:
+            base.resource_locations.update(copy.deepcopy(dict(resource_locations)))
+        if code_locations:
+            base.code_locations.update(copy.deepcopy(dict(code_locations)))
+        deployment = cls(
+            flow=flow,
+            global_config=base,
+            name=name or (flow.name if flow.name else None),
+            metadata=dict(metadata or {}),
+        )
+        return deployment.normalized()
 
 
 # ---------------------------------------------------------------------------

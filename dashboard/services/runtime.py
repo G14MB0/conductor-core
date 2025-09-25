@@ -11,12 +11,15 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from conductor.config import (
     FlowConfig,
+    FlowDeployment,
     GlobalConfig,
     load_flow_config,
     load_global_config,
 )
 from conductor.orchestrator import FlowExecution, FlowOrchestrator, ScheduledFlow
 
+
+from dashboard.services.logs import LogEntry, install_dashboard_log_handler
 
 @dataclass
 class RunSummary:
@@ -62,6 +65,7 @@ class OrchestratorRuntime:
         self._active_runs: Dict[str, _RunEntry] = {}
         self._history: List[RunSummary] = []
         self._completed: "queue.Queue[tuple[str, RunSummary]]" = queue.Queue()
+        self._log_buffer = install_dashboard_log_handler()
         self._closed = False
         self._thread.start()
         self._ready.wait()
@@ -71,27 +75,29 @@ class OrchestratorRuntime:
     # ------------------------------------------------------------------
     def register_flow(
         self,
-        flow: FlowConfig | str,
+        flow: FlowConfig | FlowDeployment | str,
         *,
         global_config: Optional[GlobalConfig | str] = None,
         name: Optional[str] = None,
         replace: bool = False,
     ) -> str:
-        """Register a new flow with the orchestrator and return its name."""
+        """Register a new flow deployment with the orchestrator and return its name."""
 
         def _register() -> str:
             assert self._orchestrator is not None
-            flow_cfg = self._ensure_flow_config(flow)
-            global_cfg = self._ensure_global_config(global_config)
-            handle = self._orchestrator.register_flow(
-                flow_cfg,
-                global_config=global_cfg,
+            deployment = self._normalize_deployment(
+                flow,
+                global_config=global_config,
                 name=name,
+            )
+            handle = self._orchestrator.register_flow(
+                deployment,
                 replace=replace,
             )
             return handle.name
 
         return self._call_in_loop(_register)
+
 
     def unregister_flow(self, name: str) -> bool:
         """Remove a registered flow if it has no active executions."""
@@ -122,6 +128,15 @@ class OrchestratorRuntime:
             return self._orchestrator.get_flow(name).global_config
 
         return self._call_in_loop(_get)
+
+    def get_deployment(self, name: str) -> FlowDeployment:
+        def _get() -> FlowDeployment:
+            assert self._orchestrator is not None
+            handle = self._orchestrator.get_flow(name)
+            return handle.deployment.normalized()
+
+        return self._call_in_loop(_get)
+
 
     def run_flow(
         self,
@@ -195,12 +210,23 @@ class OrchestratorRuntime:
 
         return self._run_coroutine(_cancel())
 
+
     def runs(self) -> Dict[str, List[RunSummary]]:
         """Return snapshots of active and completed runs."""
 
         active = self._run_coroutine(self._snapshot_active())
         self._drain_completed()
         return {"active": active, "history": list(self._history)}
+
+    def logs(self, *, minimum_level: Optional[str] = None) -> List[LogEntry]:
+        """Return captured log entries, optionally filtered by level name."""
+
+        return self._log_buffer.snapshot(level=minimum_level)
+
+    def clear_logs(self) -> None:
+        """Clear the in-memory log buffer."""
+
+        self._log_buffer.clear()
 
     def shutdown(self) -> None:
         if self._closed:
@@ -410,18 +436,30 @@ class OrchestratorRuntime:
             self._history.sort(key=lambda item: item.started_at, reverse=True)
 
     @staticmethod
-    def _ensure_flow_config(flow: FlowConfig | str) -> FlowConfig:
-        if isinstance(flow, FlowConfig):
-            return flow
-        return load_flow_config(flow)
-
-    @staticmethod
-    def _ensure_global_config(config: Optional[GlobalConfig | str]) -> GlobalConfig:
-        if config is None:
-            return GlobalConfig.from_mapping({})
-        if isinstance(config, GlobalConfig):
-            return config
-        return load_global_config(config)
+    def _normalize_deployment(
+        flow: FlowConfig | FlowDeployment | str,
+        *,
+        global_config: Optional[GlobalConfig | str],
+        name: Optional[str],
+    ) -> FlowDeployment:
+        if isinstance(flow, FlowDeployment):
+            if global_config is not None:
+                raise ValueError("global_config cannot be provided when a FlowDeployment is supplied.")
+            return flow.normalized(name=name)
+        flow_cfg = flow if isinstance(flow, FlowConfig) else load_flow_config(flow)
+        if isinstance(global_config, GlobalConfig):
+            global_cfg = global_config
+        elif isinstance(global_config, str):
+            global_cfg = load_global_config(global_config)
+        elif global_config is None:
+            global_cfg = GlobalConfig.from_mapping({})
+        else:
+            raise TypeError("global_config must be a GlobalConfig instance, a path, or None.")
+        return FlowDeployment.from_components(
+            flow_cfg,
+            global_config=global_cfg,
+            name=name,
+        )
 
 
 __all__ = ["OrchestratorRuntime", "RunSummary"]

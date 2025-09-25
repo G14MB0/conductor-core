@@ -144,13 +144,12 @@ handle.schedule(cron="0 */2 * * *")  # run every two hours
 
 The repository now includes an auxiliary Streamlit application under `dashboard/`.
 It is **not** published with the PyPI package and is meant for operational use when
-Conductor runs on a managed server. The dashboard exposes:
+Conductor runs on a managed server. The dashboard provides:
 
-- Live monitoring of running and completed executions, with Mermaid diagrams built from traces.
-- Flow registry management to register/deregister flows, trigger runs and open definitions in the designer.
-- A Streamlit Flow-powered designer to create or edit flows end-to-end and export them as JSON.
-- Scheduling controls to add interval/cron jobs and trigger runs immediately when needed.
-- A global settings page backing onto `GlobalConfig`, including Git connectivity checks for resource/code locations.
+- A per-deployment workspace to register flows from local uploads or Git repositories, with dedicated code/resource locations.
+- Real-time monitoring of active and completed runs with execution traces, payload previews, cancellation controls, and a built-in log viewer.
+- A unified operations console to schedule flows (interval or cron), launch manual runs for one or many flows and configure payload metadata.
+- An application settings page backed by `GlobalConfig` to adjust environment variables, remote logging and shared defaults reused by new deployments.
 
 ### Getting started
 

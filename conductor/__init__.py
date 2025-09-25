@@ -1,6 +1,6 @@
 """Async flow executor for configurable nodes."""
 
-from .config import FlowConfig, GlobalConfig
+from .config import FlowConfig, FlowDeployment, GlobalConfig
 from .execution import FlowExecutor, FlowResult
 from .orchestrator import (
     CronSchedule,
@@ -16,6 +16,7 @@ from .node import NodeInput, NodeOutput
 
 __all__ = [
     "FlowConfig",
+    "FlowDeployment",
     "GlobalConfig",
     "FlowExecutor",
     "FlowResult",

@@ -23,7 +23,7 @@ if "streamlit" not in sys.modules:
     fake_streamlit.session_state = {}
     sys.modules["streamlit"] = fake_streamlit
 
-from conductor.config import FlowConfig, GlobalConfig
+from conductor.config import FlowConfig, FlowDeployment, GlobalConfig, load_flow_config
 
 from dashboard import state
 from dashboard.services.runtime import OrchestratorRuntime, RunSummary
@@ -132,6 +132,29 @@ def test_register_and_run_flow(runtime: OrchestratorRuntime, flow_config_path: s
     assert runs["history"] == []
 
 
+def test_register_flow_from_deployment(runtime: OrchestratorRuntime, flow_config_path: str) -> None:
+    flow_cfg = load_flow_config(flow_config_path)
+    base_cfg = GlobalConfig.from_mapping({"env": {"LEVEL": "prod"}})
+    deployment = FlowDeployment.from_components(flow_cfg, global_config=base_cfg, name="deployed-flow")
+
+    name = runtime.register_flow(deployment)
+
+    assert name == "deployed-flow"
+    registered = runtime.get_global_config(name)
+    assert registered.env["LEVEL"] == "prod"
+    assert registered is not base_cfg
+
+
+def test_register_flow_deployment_rejects_extra_global_config(
+    runtime: OrchestratorRuntime, flow_config_path: str
+) -> None:
+    flow_cfg = load_flow_config(flow_config_path)
+    deployment = FlowDeployment.from_components(flow_cfg)
+
+    with pytest.raises(ValueError):
+        runtime.register_flow(deployment, global_config=GlobalConfig.from_mapping({}))
+
+
 def test_background_execution_tracking(runtime: OrchestratorRuntime, flow_config_path: str) -> None:
     runtime.register_flow(flow_config_path)
 
@@ -181,6 +204,18 @@ def test_cancel_background_run(runtime: OrchestratorRuntime) -> None:
     assert entry.error == "Run cancelled"
 
 
+
+
+def test_get_deployment_returns_copy(runtime: OrchestratorRuntime, flow_config_path: str) -> None:
+    runtime.register_flow(flow_config_path)
+
+    deployment = runtime.get_deployment("sample-flow")
+    assert deployment.flow.name == "sample-flow"
+
+    # Mutare la copia non deve influenzare il runtime.
+    deployment.metadata["mutation"] = "value"
+    fresh = runtime.get_deployment("sample-flow")
+    assert "mutation" not in fresh.metadata
 def test_session_state_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_streamlit = ModuleType("streamlit_stub")
     fake_streamlit.session_state = {}

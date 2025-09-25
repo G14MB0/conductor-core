@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Set
 
-from ..config import FlowConfig, GlobalConfig
+from ..config import FlowConfig, FlowDeployment, GlobalConfig
 from ..execution import ExecutionTrace, FlowExecutor, FlowResult
 
 UTC = timezone.utc
@@ -89,15 +89,18 @@ class FlowExecution:
 
 @dataclass
 class FlowRegistration:
-    """Container for a flow configuration registered with the orchestrator."""
+    """Container for a flow deployment registered with the orchestrator."""
 
-    name: str
-    flow: FlowConfig
-    global_config: GlobalConfig
+    deployment: FlowDeployment
     logger: logging.Logger
 
+    @property
+    def name(self) -> str:
+        return self.deployment.resolved_name()
+
     def create_executor(self) -> FlowExecutor:
-        return FlowExecutor(self.flow, self.global_config, logger=self.logger)
+        deployment = self.deployment
+        return FlowExecutor(deployment.flow, deployment.global_config, logger=self.logger)
 
 
 @dataclass(order=True)
@@ -139,12 +142,16 @@ class FlowHandle:
         return self._registration.name
 
     @property
+    def deployment(self) -> FlowDeployment:
+        return self._registration.deployment
+
+    @property
     def flow(self) -> FlowConfig:
-        return self._registration.flow
+        return self._registration.deployment.flow
 
     @property
     def global_config(self) -> GlobalConfig:
-        return self._registration.global_config
+        return self._registration.deployment.global_config
 
     async def run(self, payload: Any = None, *, metadata: Optional[Dict[str, Any]] = None) -> FlowExecution:
         return await self._orchestrator.run_flow(self.name, payload=payload, metadata=metadata)
@@ -205,22 +212,30 @@ class FlowOrchestrator:
     # ------------------------------------------------------------------
     def register_flow(
         self,
-        flow: FlowConfig,
+        flow: FlowConfig | FlowDeployment,
         global_config: Optional[GlobalConfig] = None,
         *,
         name: Optional[str] = None,
         replace: bool = False,
         logger: Optional[logging.Logger] = None,
     ) -> FlowHandle:
-        flow_name = name or flow.name or "flow"
+        if isinstance(flow, FlowDeployment):
+            if global_config is not None:
+                raise ValueError("global_config cannot be provided when registering a FlowDeployment.")
+            deployment = flow.normalized(name=name)
+        else:
+            deployment = FlowDeployment.from_components(
+                flow,
+                global_config=global_config,
+                name=name,
+            )
+        flow_name = deployment.resolved_name()
         if not replace and flow_name in self._flows:
             raise ValueError(f"Flow '{flow_name}' is already registered.")
 
         flow_logger = logger or self.logger.getChild(flow_name)
         registration = FlowRegistration(
-            name=flow_name,
-            flow=flow,
-            global_config=global_config or GlobalConfig.from_mapping({}),
+            deployment=deployment,
             logger=flow_logger,
         )
         self._flows[flow_name] = registration
@@ -228,6 +243,7 @@ class FlowOrchestrator:
         self._handles[flow_name] = handle
         self.logger.debug("Registered flow '%s'", flow_name)
         return handle
+
 
     def unregister_flow(self, name: str) -> bool:
         if name not in self._flows:
