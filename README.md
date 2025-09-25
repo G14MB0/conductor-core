@@ -140,6 +140,28 @@ dependency:
 handle.schedule(cron="0 */2 * * *")  # run every two hours
 ```
 
+## Operations dashboard (Streamlit)
+
+The repository now includes an auxiliary Streamlit application under `dashboard/`.
+It is **not** published with the PyPI package and is meant for operational use when
+Conductor runs on a managed server. The dashboard exposes:
+
+- Live monitoring of running and completed executions, with Mermaid diagrams built from traces.
+- Flow registry management to register/deregister flows, trigger runs and open definitions in the designer.
+- A Streamlit Flow-powered designer to create or edit flows end-to-end and export them as JSON.
+- Scheduling controls to add interval/cron jobs and trigger runs immediately when needed.
+- A global settings page backing onto `GlobalConfig`, including Git connectivity checks for resource/code locations.
+
+### Getting started
+
+```bash
+pip install -r dashboard/requirements.txt
+streamlit run dashboard/app.py
+```
+
+The application relies on the same workspace files, so any flow or configuration
+changes performed through the dashboard remain local to the repository checkout.
+
 ## Configuration overview
 
 Conductor relies on two configuration files:

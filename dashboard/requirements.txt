@@ -1,0 +1,2 @@
+﻿streamlit>=1.49
+streamlit-flow>=0.1.0
