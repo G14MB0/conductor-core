@@ -154,8 +154,14 @@ class FlowHandle:
         payload: Any = None,
         *,
         metadata: Optional[Dict[str, Any]] = None,
+        schedule_id: Optional[str] = None,
     ) -> asyncio.Task[FlowExecution]:
-        return self._orchestrator.run_flow_in_background(self.name, payload=payload, metadata=metadata)
+        return self._orchestrator.run_flow_in_background(
+            self.name,
+            payload=payload,
+            metadata=metadata,
+            schedule_id=schedule_id,
+        )
 
     def schedule(
         self,
