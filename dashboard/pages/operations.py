@@ -244,8 +244,13 @@ def _render_manual_runs(runtime: OrchestratorRuntime, flows: List[str]) -> None:
             if background:
                 st.info(f"Flow '{flow_name}' avviato in background (run-id {summary.id}).")
             else:
-                status = summary.metadata.get("last_status", summary.status)
-                st.success(f"Flow '{flow_name}' completato con stato {status}.")
+                status = (summary.status or "").lower()
+                if status == "error":
+                    details = summary.error or summary.metadata.get("last_status", "error")
+                    st.error(f"Flow '{flow_name}' terminato con errore: {details}.")
+                else:
+                    display_status = summary.metadata.get("last_status", summary.status)
+                    st.success(f"Flow '{flow_name}' completato con stato {display_status}.")
 
 
 

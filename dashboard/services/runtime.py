@@ -159,7 +159,7 @@ class OrchestratorRuntime:
         execution = self._run_coroutine(
             self._run_flow_once(name, payload, metadata, schedule_id)
         )
-        return self._summarise_execution(execution, status="completed")
+        return self._summarise_execution(execution)
 
     def schedule_flow(
         self,
@@ -309,7 +309,6 @@ class OrchestratorRuntime:
                     execution = fut.result()
                     summary = self._summarise_execution(
                         execution,
-                        status="completed",
                         run_id=run_id,
                     )
                 except asyncio.CancelledError:
@@ -376,8 +375,8 @@ class OrchestratorRuntime:
         self,
         execution: FlowExecution,
         *,
-        status: str,
         run_id: Optional[str] = None,
+        default_status: str = "completed",
     ) -> RunSummary:
         finished_at = execution.finished_at
         started_at = execution.started_at
@@ -386,10 +385,35 @@ class OrchestratorRuntime:
             duration = (finished_at - started_at).total_seconds()
         payload_preview = execution.payload
         metadata = dict(execution.metadata)
+        last_output = None
         if execution.results:
             last = execution.results[-1]
+            last_output = last.output
             metadata.setdefault("last_status", last.output.status)
             metadata.setdefault("last_node", last.node_id)
+        computed_status = metadata.get("last_status")
+        if not computed_status and last_output is not None:
+            computed_status = last_output.status
+        normalized = str(computed_status or "").lower()
+        status = default_status
+        if normalized in {"error", "failed", "failure"}:
+            status = "error"
+        elif normalized in {"cancelled", "canceled"}:
+            status = "cancelled"
+        error_message = metadata.get("error")
+        if (
+            status == "error"
+            and error_message is None
+            and last_output is not None
+            and isinstance(getattr(last_output, "status", ""), str)
+        ):
+            data = getattr(last_output, "data", None)
+            if isinstance(data, dict):
+                error_message = str(data.get("error") or data)
+            elif data not in (None, ""):
+                error_message = str(data)
+            else:
+                error_message = "Flow execution ended with status 'error'."
         return RunSummary(
             id=run_id or uuid.uuid4().hex,
             flow_name=execution.flow_name,
@@ -400,6 +424,7 @@ class OrchestratorRuntime:
             schedule_id=execution.schedule_id,
             payload_preview=payload_preview,
             metadata=metadata,
+            error=error_message,
             result=execution,
         )
 

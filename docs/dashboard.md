@@ -65,7 +65,22 @@ dashboard.
 
 The Compose service mounts the `deploy/config` directory into the container so
 you can share configuration files between the dashboard and the core Conductor
-service. Adjust the volume mappings if your flows live elsewhere.
+service. Adjust the volume mappings if your flows live elsewhere. The dashboard
+automatically loads the configuration file pointed to by the
+`CONDUCTOR_GLOBAL_CONFIG` environment variable. The default Compose
+configuration sets this to `/etc/conductor/global.json`, so edits performed in
+the dashboard start from that baseline.
+
+An optional `conductor` service is available under the `cli` profile. It keeps a
+shell-friendly container around without executing any flow on startup, which is
+useful if you want to run CLI commands alongside the dashboard:
+
+```bash
+docker compose --profile cli up dashboard
+docker compose run --rm conductor run --flow flows://your-flow.json
+```
+
+If you do not enable the profile only the dashboard container will be started.
 
 ### Customising the service
 
@@ -74,7 +89,8 @@ required:
 
 - `STREAMLIT_SERVER_PORT` - change the HTTP port exposed by Streamlit.
 - `CONDUCTOR_GLOBAL_CONFIG` - specify the default global configuration file to
-  load.
+  load. The dashboard reads this value on startup to pre-populate the
+  application settings.
 
 For production deployments consider publishing the container image to a registry
 and referencing it in the Compose file instead of building it locally.
