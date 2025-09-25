@@ -132,3 +132,9 @@ def _show_errors(*errors: Optional[str]) -> None:
 
 
 __all__ = ["render"]
+
+
+if __name__ == "__main__":  # pragma: no cover - streamlit multipage support
+    from dashboard import state
+
+    render(state.get_runtime())

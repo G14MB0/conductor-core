@@ -61,7 +61,7 @@ class OrchestratorRuntime:
         self._max_history = max_history
         self._active_runs: Dict[str, _RunEntry] = {}
         self._history: List[RunSummary] = []
-        self._completed: "queue.Queue[RunSummary]" = queue.Queue()
+        self._completed: "queue.Queue[tuple[str, RunSummary]]" = queue.Queue()
         self._closed = False
         self._thread.start()
         self._ready.wait()
@@ -198,8 +198,8 @@ class OrchestratorRuntime:
     def runs(self) -> Dict[str, List[RunSummary]]:
         """Return snapshots of active and completed runs."""
 
-        self._drain_completed()
         active = self._run_coroutine(self._snapshot_active())
+        self._drain_completed()
         return {"active": active, "history": list(self._history)}
 
     def shutdown(self) -> None:
@@ -278,7 +278,6 @@ class OrchestratorRuntime:
             self._active_runs[run_id] = entry
 
             def _done_callback(fut: asyncio.Future[FlowExecution]) -> None:
-                self._active_runs.pop(run_id, None)
                 finished_at = datetime.now(timezone.utc)
                 try:
                     execution = fut.result()
@@ -315,7 +314,7 @@ class OrchestratorRuntime:
                         metadata=dict(entry.metadata),
                         error=str(exc),
                     )
-                self._completed.put(summary)
+                self._completed.put((run_id, summary))
 
             task.add_done_callback(_done_callback)
             return RunSummary(
@@ -401,7 +400,8 @@ class OrchestratorRuntime:
     def _drain_completed(self) -> None:
         updated = False
         while not self._completed.empty():
-            summary = self._completed.get()
+            run_id, summary = self._completed.get()
+            self._active_runs.pop(run_id, None)
             self._history.insert(0, summary)
             if len(self._history) > self._max_history:
                 self._history = self._history[: self._max_history]

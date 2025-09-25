@@ -19,30 +19,49 @@ def render(runtime: OrchestratorRuntime) -> None:
     st.header("Gestione flow registrati")
 
     st.subheader("Registrazione di un nuovo flow")
+    st.session_state.setdefault("flow_upload_preview", None)
+    st.session_state.setdefault("flow_upload_filename", None)
+
     col_left, col_right = st.columns(2)
     with col_left:
         uploaded = st.file_uploader(
             "Carica configurazione flow (JSON, YAML, TOML)",
             type=["json", "yaml", "yml", "toml"],
+            key="flow-config-upload",
         )
     with col_right:
         flow_name = st.text_input("Nome da registrare (opzionale)")
         replace = st.checkbox("Sostituisci se il flow esiste già", value=False)
-        auto_load = st.checkbox("Registrazione automatica dopo upload", value=True)
 
-    new_flow: Optional[FlowConfig] = None
     if uploaded is not None:
         try:
-            new_flow = _load_flow_from_upload(uploaded)
-            st.success(f"File caricato: {new_flow.name}")
+            parsed = _load_flow_from_upload(uploaded)
         except Exception as exc:  # pragma: no cover - UI feedback
+            st.session_state["flow_upload_preview"] = None
+            st.session_state["flow_upload_filename"] = None
             st.error(f"Impossibile leggere la configurazione: {exc}")
+        else:
+            st.session_state["flow_upload_preview"] = parsed
+            st.session_state["flow_upload_filename"] = uploaded.name
+            st.success(f"File caricato: {parsed.name}")
 
-    if new_flow and auto_load:
-        _register_flow(runtime, new_flow, flow_name, replace)
-    elif new_flow:
-        if st.button("Registra flow", type="primary"):
-            _register_flow(runtime, new_flow, flow_name, replace)
+    pending_flow: Optional[FlowConfig] = st.session_state.get("flow_upload_preview")
+    if pending_flow is not None:
+        file_name = st.session_state.get("flow_upload_filename")
+        st.info(
+            f"Flow pronto alla registrazione: **{pending_flow.name}**"
+            + (f" (origine `{file_name}`)" if file_name else "")
+        )
+        preview_cols = st.columns(2)
+        if preview_cols[0].button("Registra flow caricato", type="primary"):
+            _register_flow(runtime, pending_flow, flow_name, replace)
+            st.session_state["flow_upload_preview"] = None
+            st.session_state["flow_upload_filename"] = None
+            st.session_state["flow-config-upload"] = None
+        if preview_cols[1].button("Annulla caricamento"):
+            st.session_state["flow_upload_preview"] = None
+            st.session_state["flow_upload_filename"] = None
+            st.session_state["flow-config-upload"] = None
 
     st.divider()
 
@@ -52,14 +71,14 @@ def render(runtime: OrchestratorRuntime) -> None:
         st.info("Nessun flow registrato al momento.")
         return
 
-    for name in flow_names:
+    for idx, name in enumerate(flow_names):
         flow_config = runtime.get_flow_config(name)
         with st.expander(f"{name} ({len(flow_config.nodes)} nodi)"):
             st.markdown(f"**Start:** {', '.join(flow_config.start)}")
             if flow_config.description:
                 st.markdown(flow_config.description)
             _render_nodes_table(flow_config)
-            _flow_actions(runtime, flow_config)
+            _flow_actions(runtime, flow_config, idx)
 
 
 def _register_flow(
@@ -76,15 +95,16 @@ def _register_flow(
     st.success(f"Flow '{registered_name}' registrato correttamente.")
 
 
-def _flow_actions(runtime: OrchestratorRuntime, flow: FlowConfig) -> None:
+def _flow_actions(runtime: OrchestratorRuntime, flow: FlowConfig, index: int) -> None:
+    key_suffix = f"{index}-{abs(hash(flow.name))}"
     payload_text = st.text_area(
         "Payload iniziale (JSON opzionale)",
-        key=f"payload-{flow.name}",
+        key=f"payload-{key_suffix}",
         height=120,
     )
     metadata_text = st.text_area(
         "Metadata aggiuntivi (JSON)",
-        key=f"metadata-{flow.name}",
+        key=f"metadata-{key_suffix}",
         height=120,
     )
 
@@ -92,7 +112,7 @@ def _flow_actions(runtime: OrchestratorRuntime, flow: FlowConfig) -> None:
     metadata, metadata_error = _parse_optional_json(metadata_text)
 
     cols = st.columns(4)
-    if cols[0].button("Esegui (sincrono)", key=f"run-sync-{flow.name}"):
+    if cols[0].button("Esegui (sincrono)", key=f"run-sync-{key_suffix}"):
         if payload_error or metadata_error:
             _show_payload_errors(payload_error, metadata_error)
         else:
@@ -105,7 +125,7 @@ def _flow_actions(runtime: OrchestratorRuntime, flow: FlowConfig) -> None:
             st.success(
                 f"Esecuzione completata con stato {summary.metadata.get('last_status', 'n/a')}"
             )
-    if cols[1].button("Esegui in background", key=f"run-bg-{flow.name}"):
+    if cols[1].button("Esegui in background", key=f"run-bg-{key_suffix}"):
         if payload_error or metadata_error:
             _show_payload_errors(payload_error, metadata_error)
         else:
@@ -118,10 +138,10 @@ def _flow_actions(runtime: OrchestratorRuntime, flow: FlowConfig) -> None:
             st.info(
                 f"Esecuzione avviata (run-id {summary.id}). Monitora nella sezione Monitoraggio."
             )
-    if cols[2].button("Apri nel Flow Designer", key=f"designer-{flow.name}"):
+    if cols[2].button("Apri nel Flow Designer", key=f"designer-{key_suffix}"):
         st.session_state["flow_builder_import"] = flow_config_to_dict(flow)
         st.success("Flow caricato nel designer. Apri la pagina 'Flow Designer'.")
-    if cols[3].button("Deregistra", key=f"unregister-{flow.name}"):
+    if cols[3].button("Deregistra", key=f"unregister-{key_suffix}"):
         try:
             runtime.unregister_flow(flow.name)
         except Exception as exc:  # pragma: no cover - UI feedback
@@ -182,3 +202,9 @@ def _show_payload_errors(*errors: Optional[str]) -> None:
 
 
 __all__ = ["render"]
+
+
+if __name__ == "__main__":  # pragma: no cover - streamlit multipage support
+    from dashboard import state
+
+    render(state.get_runtime())

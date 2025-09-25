@@ -96,27 +96,31 @@ def _editor(config: GlobalConfig) -> None:
         mapping: Dict[str, Any] = {}
         errors: List[str] = []
 
-        general_data, general_errors = _general_section(config)
+        with general_tab:
+            general_data, general_errors = _general_section(config)
         mapping.update(general_data)
         errors.extend(general_errors)
 
-        resources_data, resources_errors = _locations_section(
-            config.resource_locations,
-            table_key="resource-locations",
-            empty_label="Nessuna resource location definita.",
-        )
+        with resources_tab:
+            resources_data, resources_errors = _locations_section(
+                config.resource_locations,
+                table_key="resource-locations",
+                empty_label="Nessuna resource location definita.",
+            )
         mapping["resource_locations"] = resources_data
         errors.extend(resources_errors)
 
-        code_data, code_errors = _locations_section(
-            config.code_locations,
-            table_key="code-locations",
-            empty_label="Nessuna code location definita.",
-        )
+        with code_tab:
+            code_data, code_errors = _locations_section(
+                config.code_locations,
+                table_key="code-locations",
+                empty_label="Nessuna code location definita.",
+            )
         mapping["code_locations"] = code_data
         errors.extend(code_errors)
 
-        logging_data, logging_errors = _logging_section(config)
+        with logging_tab:
+            logging_data, logging_errors = _logging_section(config)
         if logging_data is not None:
             mapping["remote_logging"] = logging_data
         errors.extend(logging_errors)
@@ -363,3 +367,7 @@ def _normalize_editor_rows(data) -> List[Dict[str, Any]]:
 
 
 __all__ = ["render"]
+
+
+if __name__ == "__main__":  # pragma: no cover - streamlit multipage support
+    render()

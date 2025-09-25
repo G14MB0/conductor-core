@@ -35,7 +35,6 @@ def mermaid_diagram(
         """,
         height=height,
         scrolling=True,
-        key=key,
     )
     if download:
         download_key = key or f"mermaid-download-{abs(hash(mermaid_source))}"
