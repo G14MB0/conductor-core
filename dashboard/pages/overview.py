@@ -112,3 +112,9 @@ def _render_history_entry(runtime: OrchestratorRuntime, summary: RunSummary) -> 
 
 
 __all__ = ["render"]
+
+
+if __name__ == "__main__":  # pragma: no cover - streamlit multipage support
+    from dashboard import state
+
+    render(state.get_runtime())

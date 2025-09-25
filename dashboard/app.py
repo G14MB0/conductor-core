@@ -29,9 +29,6 @@ def main() -> None:
             st.rerun()
         st.divider()
         selection = st.radio("Navigazione", list(pages.keys()))
-        if st.button("Reset sessione"):
-            state.reset_state()
-            st.rerun()
 
     pages[selection]()
 

@@ -28,6 +28,20 @@ def render(runtime: OrchestratorRuntime) -> None:
 
     app = sf.App()
 
+    if "flow_builder_current_page" not in st.session_state:
+        st.session_state["flow_builder_current_page"] = _METADATA_PAGE
+        st.session_state["flow_builder_page_args"] = ()
+        st.session_state["flow_builder_page_kwargs"] = {}
+
+    def _remember_page(page: str, *args: Any, **kwargs: Any) -> None:
+        st.session_state["flow_builder_current_page"] = page
+        st.session_state["flow_builder_page_args"] = tuple(args)
+        st.session_state["flow_builder_page_kwargs"] = dict(kwargs)
+
+    def _goto(page: str, *args: Any, **kwargs: Any) -> None:
+        _remember_page(page, *args, **kwargs)
+        app.goto(page, *args, **kwargs)
+
     @app.route(_METADATA_PAGE)
     def metadata_page() -> None:
         st.subheader("Metadati del flow")
@@ -58,7 +72,7 @@ def render(runtime: OrchestratorRuntime) -> None:
             elif not builder_state["start"]:
                 st.error("Indicare almeno un nodo di start.")
             else:
-                app.goto(_NODES_PAGE)
+                _goto(_NODES_PAGE)
 
     @app.route(_NODES_PAGE)
     def nodes_page() -> None:
@@ -188,7 +202,7 @@ def render(runtime: OrchestratorRuntime) -> None:
                     st.success("Nodo eliminato.")
         nav_cols = st.columns(2)
         if nav_cols[0].button("⬅️ Indietro"):
-            app.goto(_METADATA_PAGE)
+            _goto(_METADATA_PAGE)
         if nav_cols[1].button("Avanti ➡️", type="primary"):
             if not nodes:
                 st.error("Definire almeno un nodo.")
@@ -199,7 +213,7 @@ def render(runtime: OrchestratorRuntime) -> None:
                         "I seguenti start node non esistono più: " + ", ".join(missing)
                     )
                 else:
-                    app.goto(_REVIEW_PAGE)
+                    _goto(_REVIEW_PAGE)
 
     @app.route(_REVIEW_PAGE)
     def review_page() -> None:
@@ -208,7 +222,7 @@ def render(runtime: OrchestratorRuntime) -> None:
         if flow_config is None:
             st.error("Completare i passaggi precedenti per generare una configurazione valida.")
             if st.button("⬅️ Torna ai nodi"):
-                app.goto(_NODES_PAGE)
+                _goto(_NODES_PAGE)
             return
         st.success("Configurazione valida.")
         st.markdown(f"**Nome:** {flow_config.name}")
@@ -239,14 +253,20 @@ def render(runtime: OrchestratorRuntime) -> None:
         if reset_col.button("Reset designer"):
             builder_state.clear()
             builder_state.update(_default_state())
-            app.goto(_METADATA_PAGE)
+            _goto(_METADATA_PAGE)
 
         if st.button("⬅️ Torna ai nodi"):
-            app.goto(_NODES_PAGE)
+            _goto(_NODES_PAGE)
 
-    if "flow_builder_initialized" not in st.session_state:
-        app.next(_METADATA_PAGE)
-        st.session_state["flow_builder_initialized"] = True
+    current_page: str = st.session_state.get("flow_builder_current_page", _METADATA_PAGE)
+    current_args = st.session_state.get("flow_builder_page_args", ())
+    current_kwargs = st.session_state.get("flow_builder_page_kwargs", {})
+    if current_page not in app._pages:
+        current_page = _METADATA_PAGE
+        current_args = ()
+        current_kwargs = {}
+        _remember_page(current_page)
+    app.next(current_page, *current_args, **current_kwargs)
 
     app.show()
 
@@ -284,6 +304,9 @@ def _apply_import_if_present(builder_state: Dict[str, Any]) -> None:
             }
         )
         st.success("Flow importato nel designer.")
+        st.session_state["flow_builder_current_page"] = _METADATA_PAGE
+        st.session_state["flow_builder_page_args"] = ()
+        st.session_state["flow_builder_page_kwargs"] = {}
     except Exception as exc:  # pragma: no cover - UI feedback
         st.error(f"Impossibile importare il flow: {exc}")
 
@@ -396,3 +419,9 @@ def _build_flow(state: Dict[str, Any]) -> Optional[FlowConfig]:
 
 
 __all__ = ["render"]
+
+
+if __name__ == "__main__":  # pragma: no cover - streamlit multipage support
+    from dashboard import state
+
+    render(state.get_runtime())
