@@ -154,9 +154,20 @@ Conductor runs on a managed server. The dashboard exposes:
 
 ### Getting started
 
+Refer to [docs/dashboard.md](docs/dashboard.md) for a complete walkthrough that
+covers local execution and Docker Compose usage. The short version:
+
 ```bash
+pip install -e .
 pip install -r dashboard/requirements.txt
 streamlit run dashboard/app.py
+```
+
+To run the dashboard in a container use the provided Compose service:
+
+```bash
+cd deploy
+docker compose up dashboard
 ```
 
 The application relies on the same workspace files, so any flow or configuration
