@@ -171,6 +171,25 @@ docker compose up dashboard
 
 The application relies on the same workspace files, so any flow or configuration
 changes performed through the dashboard remain local to the repository checkout.
+The dashboard automatically loads the global configuration referenced by the
+`CONDUCTOR_GLOBAL_CONFIG` environment variable (set to
+`/etc/conductor/global.json` in the Compose file). Adjust the mount or variable
+if you want to point the UI at a different baseline configuration.
+
+The Compose file also exposes an optional `conductor` service under the `cli`
+profile. It keeps an idle container around so you can execute CLI commands
+without triggering a flow automatically:
+
+```bash
+# Launch the dashboard and the helper CLI container
+docker compose --profile cli up dashboard
+
+# Run commands on demand
+docker compose run --rm conductor run --flow flows://order-routing.json
+```
+
+If you do not need the helper container simply omit the profile and only the
+dashboard will start.
 
 ## Configuration overview
 

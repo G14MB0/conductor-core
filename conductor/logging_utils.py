@@ -13,6 +13,9 @@ from .config import GlobalConfig, RemoteLoggingConfig
 
 LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 
+_DEFAULT_HANDLER_ATTR = "_conductor_default_handler"
+_REMOTE_HANDLER_ATTR = "_conductor_remote_handler"
+
 
 class RemoteLogHandler(Handler):
     """Send log records to a remote HTTP endpoint."""
@@ -50,15 +53,31 @@ def configure_logging(config: Optional[GlobalConfig], level: int = logging.INFO)
 
     logger = logging.getLogger("conductor")
     logger.setLevel(level)
-    logger.handlers = []
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    logger.addHandler(stream_handler)
+    formatter = logging.Formatter(LOG_FORMAT)
+
+    default_handler: Optional[logging.Handler] = None
+    for handler in logger.handlers:
+        if getattr(handler, _DEFAULT_HANDLER_ATTR, False):
+            default_handler = handler
+            break
+
+    if default_handler is None:
+        default_handler = logging.StreamHandler()
+        setattr(default_handler, _DEFAULT_HANDLER_ATTR, True)
+        logger.addHandler(default_handler)
+
+    default_handler.setFormatter(formatter)
+
+    # Remove any previously configured remote handlers before installing a new one.
+    for handler in list(logger.handlers):
+        if getattr(handler, _REMOTE_HANDLER_ATTR, False):
+            logger.removeHandler(handler)
 
     if config and config.remote_logging and config.remote_logging.enabled:
         remote_handler = RemoteLogHandler(config.remote_logging)
-        remote_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        remote_handler.setFormatter(formatter)
+        setattr(remote_handler, _REMOTE_HANDLER_ATTR, True)
         logger.addHandler(remote_handler)
 
     return logger

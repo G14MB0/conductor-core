@@ -1,11 +1,12 @@
 ﻿"""Session state helpers for the Streamlit dashboard."""
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 import streamlit as st
 
-from conductor.config import GlobalConfig
+from conductor.config import GlobalConfig, load_global_config
 
 from dashboard.services.runtime import OrchestratorRuntime
 
@@ -27,8 +28,26 @@ def get_global_config_state() -> Dict[str, Any]:
             "config": GlobalConfig.from_mapping({}),
             "path": None,
             "dirty": False,
+            "_initialised": False,
         },
     )
+    if not state.get("_initialised"):
+        state["_initialised"] = True
+        env_path = os.environ.get("CONDUCTOR_GLOBAL_CONFIG")
+        if env_path:
+            try:
+                config = load_global_config(env_path)
+            except Exception as exc:  # pragma: no cover - configuration feedback
+                state["_load_error"] = str(exc)
+                state["_load_source"] = env_path
+            else:
+                state["config"] = config
+                state["path"] = env_path
+                state["dirty"] = False
+    if state.get("_load_error") and not state.get("_load_error_reported"):
+        source = state.get("_load_source", "CONDUCTOR_GLOBAL_CONFIG")
+        st.warning(f"Impossibile caricare la global config '{source}': {state['_load_error']}")
+        state["_load_error_reported"] = True
     return state
 
 
