@@ -54,7 +54,7 @@ def _loaders() -> None:
                     st.error(f"Impossibile caricare la configurazione: {exc}")
                 else:
                     set_global_config(loaded, path=path_input, dirty=False)
-                    st.experimental_rerun()
+                    st.rerun()
     uploaded = st.file_uploader(
         "Oppure carica un file dal tuo computer",
         type=["json", "yaml", "yml", "toml"],
@@ -84,7 +84,7 @@ def _loaders() -> None:
             else:
                 set_global_config(loaded, path=None, dirty=True)
                 st.success("Configurazione caricata in memoria. Ricordati di salvarla su file.")
-                st.experimental_rerun()
+                st.rerun()
 
 
 def _editor(config: GlobalConfig) -> None:

@@ -49,7 +49,7 @@ def _render_active_runs(runtime: OrchestratorRuntime, runs: List[RunSummary]) ->
                 type="primary",
             ):
                 runtime.cancel_run(summary.id)
-                st.experimental_rerun()
+                st.rerun()
             if summary.metadata:
                 with st.expander("Metadata"):
                     st.json(summary.metadata)

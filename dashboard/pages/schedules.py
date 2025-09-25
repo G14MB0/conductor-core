@@ -112,7 +112,7 @@ def _schedules_table(runtime: OrchestratorRuntime) -> None:
             if cols[1].button("Annulla schedulazione", key=f"cancel-{schedule.id}"):
                 runtime.cancel_schedule(schedule.id)
                 st.success("Schedulazione annullata.")
-                st.experimental_rerun()
+                st.rerun()
 
 
 def _parse_optional_json(value: str) -> tuple[Optional[Any], Optional[str]]:

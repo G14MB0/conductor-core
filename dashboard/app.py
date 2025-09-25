@@ -26,12 +26,12 @@ def main() -> None:
         st.metric("Flow registrati", len(flows_registered))
         st.metric("Esecuzioni attive", len(runs_snapshot["active"]))
         if st.button("Aggiorna"):
-            st.experimental_rerun()
+            st.rerun()
         st.divider()
         selection = st.radio("Navigazione", list(pages.keys()))
         if st.button("Reset sessione"):
             state.reset_state()
-            st.experimental_rerun()
+            st.rerun()
 
     pages[selection]()
 

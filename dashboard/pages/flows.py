@@ -128,7 +128,7 @@ def _flow_actions(runtime: OrchestratorRuntime, flow: FlowConfig) -> None:
             st.error(f"Impossibile deregistrare il flow: {exc}")
         else:
             st.success(f"Flow '{flow.name}' rimosso.")
-            st.experimental_rerun()
+            st.rerun()
 
 
 def _render_nodes_table(flow: FlowConfig) -> None:

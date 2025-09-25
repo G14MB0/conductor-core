@@ -2,7 +2,9 @@ version: "3.9"
 
 services:
   conductor:
-    image: your-dockerhub-namespace/conductor:latest
+    build:
+      context: ..
+      dockerfile: deploy/conductor.Dockerfile
     restart: unless-stopped
     environment:
       CONDUCTOR_GLOBAL_CONFIG: /etc/conductor/global.json
@@ -28,7 +30,7 @@ services:
       CONDUCTOR_GLOBAL_CONFIG: /etc/conductor/global.json
       STREAMLIT_SERVER_PORT: 8501
     ports:
-      - "8501:8501"
+      - "8503:8501"
     volumes:
       - ./config:/etc/conductor:ro
     depends_on:
