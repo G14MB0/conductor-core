@@ -7,9 +7,11 @@ from typing import Dict, List, Optional
 import streamlit as st
 
 from dashboard.services.runtime import OrchestratorRuntime, RunSummary
+from dashboard.ui import ensure_wide_layout
+import streamlit.components.v1 as components
 
 
-_AUTO_REFRESH_SCRIPT_KEY = "__conductor_refresh_script"
+ensure_wide_layout(title="Conductor ? Operazioni")
 
 
 def render(runtime: OrchestratorRuntime) -> None:
@@ -304,6 +306,14 @@ def _render_logs(runtime: OrchestratorRuntime) -> None:
         st.info("Nessun container configurato per la raccolta dei log.")
         return
 
+    snapshots_with_content = [snapshot for snapshot in container_logs if snapshot.content]
+    snapshots_with_errors = [snapshot for snapshot in container_logs if snapshot.error]
+    if snapshots_with_errors and not snapshots_with_content:
+        error_messages = {snapshot.error for snapshot in snapshots_with_errors if snapshot.error}
+        if error_messages and all("docker cli" in message.lower() for message in error_messages):
+            st.info("La raccolta dei log dei container ? disabilitata perch? la CLI Docker non ? disponibile nel container dashboard.")
+            return
+
     for snapshot in container_logs:
         label = f"{snapshot.name}"
         with st.expander(label, expanded=snapshot.error is not None):
@@ -319,18 +329,28 @@ def _render_logs(runtime: OrchestratorRuntime) -> None:
 # ---------------------------------------------------------------------------
 
 def _inject_auto_refresh(interval_seconds: Optional[int]) -> None:
+    """Trigger a Streamlit rerun at the requested interval using a lightweight JS snippet."""
+
     if not interval_seconds:
-        clear_script = "<script>if (window.__conductorRefresh) { clearTimeout(window.__conductorRefresh); }</script>"
-        st.markdown(clear_script, unsafe_allow_html=True)
+        components.html(
+            "<script>if (window.__conductorRefresh) { clearTimeout(window.__conductorRefresh); }</script>",
+            height=0,
+        )
         return
     millis = max(1, int(interval_seconds)) * 1000
-    script = (
-        "<script>"
-        "if (window.__conductorRefresh) { clearTimeout(window.__conductorRefresh); }"
-        f"window.__conductorRefresh = setTimeout(() => window.location.reload(), {millis});"
-        "</script>"
+    components.html(
+        f"""
+            <script>
+            const rerun = () => window.parent.postMessage({{ type: 'streamlit:rerun' }}, '*');
+            if (window.__conductorRefresh) {{ clearTimeout(window.__conductorRefresh); }}
+            window.__conductorRefresh = setTimeout(rerun, {millis});
+            </script>
+        """,
+        height=0,
     )
-    st.markdown(script, unsafe_allow_html=True)
+
+
+
 
 
 def _parse_optional_json(value: str) -> tuple[Optional[object], Optional[str]]:

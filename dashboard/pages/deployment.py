@@ -1,19 +1,23 @@
 """Flow deployment management page."""
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 import json
 import streamlit as st
 
 
-from conductor.config import FlowDeployment, GlobalConfig
+from conductor.config import FlowDeployment, FlowRuntimeConfig, GlobalConfig
 
 from dashboard import state
 from dashboard.services import deployments
 from dashboard.services.deployments import DeploymentResult, GitRepositorySnapshot
 from dashboard.services.runtime import OrchestratorRuntime
+from dashboard.ui import ensure_wide_layout
 
+
+ensure_wide_layout(title="Conductor - Deployment")
 
 _LOCAL_STATE_KEY = "deployment_local_state"
 _GIT_STATE_KEY = "deployment_git_state"
@@ -299,24 +303,21 @@ def _render_registered_flows(runtime: OrchestratorRuntime) -> None:
             deployment = runtime.get_deployment(name)
         except Exception:
             deployment = None
+        metadata = dict(deployment.metadata) if deployment and deployment.metadata else {}
         key_suffix = str(abs(hash(name)))
         with st.expander(f"{name} ({len(flow_config.nodes)} nodi)"):
             st.markdown(f"**Start nodes:** {', '.join(flow_config.start)}")
             if flow_config.description:
                 st.markdown(flow_config.description)
-            if deployment and deployment.metadata:
-                st.caption("Metadati del deployment")
-                _render_metadata(deployment.metadata)
+            if global_config.env:
+                st.markdown(f"**Variabili globali definite:** {len(global_config.env)}")
+            if metadata:
+                _render_artifacts(metadata)
             if deployment:
-                runtime_cfg = deployment.runtime_config
-                code_locations = ", ".join(runtime_cfg.code_locations.keys()) or "Nessuna"
-                st.markdown(f"**Code locations:** {code_locations}")
-                resource_locations = ", ".join(runtime_cfg.resource_locations.keys()) or "Nessuna"
-                st.markdown(f"**Resource locations:** {resource_locations}")
-                registries = ", ".join(runtime_cfg.container_registries.keys()) or "Nessuno"
-                st.markdown(f"**Container registries:** {registries}")
-                secrets = ", ".join(runtime_cfg.secrets.keys()) or "Nessuno"
-                st.markdown(f"**Secrets:** {secrets}")
+                _render_runtime_overview(deployment.runtime_config)
+                if metadata:
+                    st.caption("Metadati raw")
+                    _render_metadata(metadata)
             if st.button("Deregistra flow", key=f"remove-{key_suffix}"):
                 try:
                     runtime.unregister_flow(name)
@@ -326,6 +327,77 @@ def _render_registered_flows(runtime: OrchestratorRuntime) -> None:
                     deployments.remove_saved_deployment(name)
                     st.success(f"Flow '{name}' rimosso.")
                     st.rerun()
+
+
+def _render_artifacts(metadata: Dict[str, Optional[str]]) -> None:
+    rows: List[tuple[str, str]] = []
+    for label, key in [
+        ("Flow", "flow_path"),
+        ("Global config", "global_path"),
+        ("Archivio codice", "code_archive"),
+        ("Code directory", "code_path"),
+        ("Sorgente", "source"),
+        ("Storage", "storage"),
+    ]:
+        value = metadata.get(key)
+        if value:
+            rows.append((label, value))
+    for index, hint in enumerate(_payload_hints(metadata)):
+        label = "Payload di esempio" if index == 0 else "Payload aggiuntivo"
+        rows.append((label, hint))
+    if not rows:
+        return
+    st.caption("Artefatti salvati")
+    for label, value in rows:
+        st.markdown(f"- **{label}:** `{value}`")
+
+
+
+def _render_runtime_overview(runtime_cfg: FlowRuntimeConfig) -> None:
+    st.caption("Configurazione runtime")
+    flow_definition = runtime_cfg.flow_definition or "Nessuna"
+    st.markdown(f"- **Flow definition:** `{flow_definition}`")
+    callables = ", ".join(runtime_cfg.callables) or "Nessuno"
+    st.markdown(f"- **Callables:** {callables}")
+    code_locations = ", ".join(runtime_cfg.code_locations.keys()) or "Nessuna"
+    st.markdown(f"- **Code locations:** {code_locations}")
+    resource_locations = ", ".join(runtime_cfg.resource_locations.keys()) or "Nessuna"
+    st.markdown(f"- **Resource locations:** {resource_locations}")
+    registries = ", ".join(runtime_cfg.container_registries.keys()) or "Nessuno"
+    st.markdown(f"- **Container registries:** {registries}")
+    secrets = ", ".join(runtime_cfg.secrets.keys()) or "Nessuno"
+    st.markdown(f"- **Secrets:** {secrets}")
+
+
+
+def _payload_hints(metadata: Dict[str, Optional[str]]) -> List[str]:
+    roots: List[Path] = []
+    for key in ("storage", "flow_path", "code_path"):
+        value = metadata.get(key)
+        if not value:
+            continue
+        path = Path(value)
+        root = path.parent if path.is_file() else path
+        if root.exists():
+            roots.append(root)
+    seen: set[str] = set()
+    results: List[str] = []
+    if not roots:
+        return results
+    extensions = {".json", ".yaml", ".yml", ".toml"}
+    for root in roots:
+        for candidate in root.rglob("payload*"):
+            if candidate.is_file() and candidate.suffix.lower() in extensions:
+                text = str(candidate)
+                if text not in seen:
+                    seen.add(text)
+                    results.append(text)
+            if len(results) >= 5:
+                break
+        if len(results) >= 5:
+            break
+    return results
+
 
 
 def _render_metadata(metadata: Dict[str, Optional[str]]) -> None:
