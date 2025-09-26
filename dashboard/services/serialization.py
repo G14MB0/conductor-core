@@ -72,6 +72,8 @@ def global_config_to_dict(config: GlobalConfig) -> Dict[str, Any]:
     }
     if config.remote_logging:
         data["remote_logging"] = _remote_logging_to_dict(config.remote_logging)
+    if config.dependencies:
+        data["dependencies"] = list(config.dependencies)
     if config.extra:
         data.update(config.extra)
     return data

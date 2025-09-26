@@ -32,6 +32,8 @@ if "streamlit" not in sys.modules:
     sys.modules["streamlit"] = fake_streamlit
 
 from conductor.config import FlowConfig, FlowDeployment, FlowRuntimeConfig, GlobalConfig, load_flow_config
+from dashboard.services import container_logs as container_logs_module
+from dashboard.services.serialization import global_config_to_dict
 
 from dashboard import state
 from dashboard.services import deployments
@@ -60,6 +62,17 @@ async def slow_node(node_input):
 
     await asyncio.sleep(0.2)
     return {"status": "success", "data": node_input.data}
+
+
+def test_global_config_dependencies_parsing() -> None:
+    config = GlobalConfig.from_mapping({"dependencies": ["pkg-a", "pkg-b"]})
+    assert config.dependencies == ["pkg-a", "pkg-b"]
+
+    alt = GlobalConfig.from_mapping({"packages": "pkg-c, pkg-d"})
+    assert alt.dependencies == ["pkg-c", "pkg-d"]
+
+    dumped = global_config_to_dict(config)
+    assert dumped["dependencies"] == ["pkg-a", "pkg-b"]
 
 
 @pytest.fixture
@@ -186,6 +199,17 @@ def test_background_execution_tracking(runtime: OrchestratorRuntime, flow_config
     # Once the flow is idle it can be unregistered safely.
     assert runtime.unregister_flow("sample-flow") is True
     assert runtime.unregister_flow("sample-flow") is False
+
+
+def test_runtime_container_logs_handles_missing_docker(monkeypatch, runtime: OrchestratorRuntime) -> None:
+    monkeypatch.setenv("CONDUCTOR_DASHBOARD_LOG_CONTAINERS", "custom-container")
+    monkeypatch.setattr(container_logs_module, "_resolve_docker_command", lambda: None)
+
+    snapshots = runtime.container_logs(tail=25)
+
+    assert snapshots
+    assert snapshots[0].name == "custom-container"
+    assert snapshots[0].error
 
 
 def test_cancel_background_run(runtime: OrchestratorRuntime) -> None:

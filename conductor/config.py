@@ -141,12 +141,24 @@ def _parse_repository_locations(raw: Any, section_name: str) -> Dict[str, Reposi
 class GlobalConfig:
     """Server-level runtime configuration shared across flows."""
 
-    remote_logging: Optional[RemoteLoggingConfig] = None
-    env: Dict[str, str] = field(default_factory=dict)
-    max_concurrency: Optional[int] = None
-    process_pool_size: Optional[int] = None
-    shared_state: Dict[str, Any] = field(default_factory=dict)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    def __init__(
+        self,
+        *,
+        env: Optional[Mapping[str, Any]] = None,
+        shared_state: Optional[Mapping[str, Any]] = None,
+        max_concurrency: Optional[int] = None,
+        process_pool_size: Optional[int] = None,
+        dependencies: Optional[Iterable[str]] = None,
+        remote_logging: Optional[RemoteLoggingConfig] = None,
+        extra: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        self.env: Dict[str, Any] = dict(env or {})
+        self.shared_state: Dict[str, Any] = dict(shared_state or {})
+        self.max_concurrency = max_concurrency
+        self.process_pool_size = process_pool_size
+        self.dependencies = list(dependencies or [])
+        self.remote_logging = remote_logging
+        self.extra: Dict[str, Any] = dict(extra or {})
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any] | None) -> "GlobalConfig":
@@ -163,6 +175,19 @@ class GlobalConfig:
         max_concurrency = data.get("max_concurrency") or data.get("maxConcurrency")
         process_pool_size = data.get("process_pool_size") or data.get("processPoolSize")
         shared_state = dict(data.get("shared_state") or data.get("sharedState") or {})
+        raw_dependencies = data.get("dependencies") or data.get("packages")
+        dependencies: List[str] = []
+        if raw_dependencies:
+            if isinstance(raw_dependencies, (list, tuple, set)):
+                dependencies = [str(item).strip() for item in raw_dependencies if str(item).strip()]
+            elif isinstance(raw_dependencies, str):
+                dependencies = [
+                    line.strip()
+                    for line in raw_dependencies.replace(",", "\n").splitlines()
+                    if line.strip()
+                ]
+            else:
+                raise TypeError("Global config 'dependencies' must be a sequence or string.")
 
         known_keys = {
             "remote_logging",
@@ -175,6 +200,8 @@ class GlobalConfig:
             "processPoolSize",
             "shared_state",
             "sharedState",
+            "dependencies",
+            "packages",
         }
         extra = {k: v for k, v in data.items() if k not in known_keys}
 
@@ -184,6 +211,7 @@ class GlobalConfig:
             max_concurrency=int(max_concurrency) if max_concurrency is not None else None,
             process_pool_size=int(process_pool_size) if process_pool_size is not None else None,
             shared_state=shared_state,
+            dependencies=dependencies,
             extra=extra,
         )
 

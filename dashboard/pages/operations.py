@@ -261,7 +261,7 @@ def _render_manual_runs(runtime: OrchestratorRuntime, flows: List[str]) -> None:
 
 def _render_logs(runtime: OrchestratorRuntime) -> None:
     st.subheader("Log runtime")
-    cols = st.columns([3, 1])
+    cols = st.columns([2, 1, 1])
     level_options = ["ALL", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
     selected = cols[0].selectbox(
         "Livello minimo",
@@ -269,7 +269,15 @@ def _render_logs(runtime: OrchestratorRuntime) -> None:
         index=2,
         key="logs-min-level",
     )
-    if cols[1].button("Svuota log", key="logs-clear"):
+    tail_lines = cols[1].number_input(
+        "Righe per container",
+        min_value=10,
+        max_value=2000,
+        value=200,
+        step=10,
+        key="logs-tail-lines",
+    )
+    if cols[2].button("Svuota log", key="logs-clear"):
         runtime.clear_logs()
         st.success("Log eliminati.")
 
@@ -289,6 +297,22 @@ def _render_logs(runtime: OrchestratorRuntime) -> None:
         for entry in entries
     ]
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    st.subheader("Log container Docker")
+    container_logs = runtime.container_logs(tail=int(tail_lines))
+    if not container_logs:
+        st.info("Nessun container configurato per la raccolta dei log.")
+        return
+
+    for snapshot in container_logs:
+        label = f"{snapshot.name}"
+        with st.expander(label, expanded=snapshot.error is not None):
+            if snapshot.error:
+                st.warning(f"Impossibile leggere i log: {snapshot.error}")
+            if snapshot.content:
+                st.code(snapshot.content, language="log")
+            elif not snapshot.error:
+                st.info("Nessun log disponibile per il container specificato.")
 
 # ---------------------------------------------------------------------------
 # Helpers
