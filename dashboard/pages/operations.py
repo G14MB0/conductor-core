@@ -341,7 +341,13 @@ def _inject_auto_refresh(interval_seconds: Optional[int]) -> None:
     components.html(
         f"""
             <script>
-            const rerun = () => window.parent.postMessage({{ type: 'streamlit:rerun' }}, '*');
+            const rerun = () => {{
+                const message = {{
+                    isStreamlitMessage: true,
+                    type: 'streamlit:rerunScript',
+                }};
+                window.parent.postMessage(message, '*');
+            }};
             if (window.__conductorRefresh) {{ clearTimeout(window.__conductorRefresh); }}
             window.__conductorRefresh = setTimeout(rerun, {millis});
             </script>

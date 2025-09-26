@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from functools import wraps
 from typing import Any, Dict, Optional
 
 import streamlit as st
@@ -16,23 +17,59 @@ _RUNTIME_KEY = "dashboard_runtime"
 _GLOBAL_CONFIG_KEY = "dashboard_global_config"
 
 
+if hasattr(st, "cache_resource"):
+    _runtime_cache = st.cache_resource
+elif hasattr(st, "experimental_singleton"):
+    _runtime_cache = st.experimental_singleton  # type: ignore[attr-defined]
+else:  # pragma: no cover - compatibility with very old Streamlit releases
+
+    def _runtime_cache(func):  # type: ignore[no-redef]
+        cache: Dict[str, OrchestratorRuntime] = {}
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if "value" not in cache:
+                cache["value"] = func(*args, **kwargs)
+            return cache["value"]
+
+        def clear() -> None:
+            cache.pop("value", None)
+
+        wrapper.clear = clear  # type: ignore[attr-defined]
+        return wrapper
+
+
+@_runtime_cache
+def _get_shared_runtime() -> OrchestratorRuntime:
+    """Create or return the shared orchestrator runtime for the dashboard."""
+
+    return OrchestratorRuntime()
+
+
+def _initialise_runtime(runtime: OrchestratorRuntime) -> None:
+    if getattr(runtime, "_dashboard_initialised", False):
+        return
+
+    failures = []
+    for name, deployment in load_saved_deployments().items():
+        try:
+            runtime.register_flow(deployment, replace=True)
+        except Exception as exc:  # pragma: no cover - restoration feedback
+            failures.append((name, str(exc)))
+    runtime._dashboard_initialised = True  # type: ignore[attr-defined]
+    runtime._dashboard_restore_failures = failures  # type: ignore[attr-defined]
+
+
 def get_runtime() -> OrchestratorRuntime:
-    if _RUNTIME_KEY not in st.session_state:
-        runtime = OrchestratorRuntime()
-        failures = []
-        for name, deployment in load_saved_deployments().items():
-            try:
-                runtime.register_flow(deployment, replace=True)
-            except Exception as exc:  # pragma: no cover - restoration feedback
-                failures.append((name, str(exc)))
-        st.session_state[_RUNTIME_KEY] = runtime
-        if failures:
-            st.session_state["_runtime_restore_failures"] = failures
-    runtime = st.session_state[_RUNTIME_KEY]
-    failures = st.session_state.pop("_runtime_restore_failures", None)
-    if failures:
+    runtime = _get_shared_runtime()
+    st.session_state[_RUNTIME_KEY] = runtime
+    _initialise_runtime(runtime)
+
+    failures = getattr(runtime, "_dashboard_restore_failures", [])  # type: ignore[attr-defined]
+    if failures and not st.session_state.get("_runtime_restore_reported"):
         for name, message in failures:
             st.warning(f"Impossibile ripristinare il flow '{name}': {message}")
+        st.session_state["_runtime_restore_reported"] = True
     return runtime
 
 
@@ -84,10 +121,14 @@ def mark_global_config_clean() -> None:
 
 
 def reset_state() -> None:
-    if _RUNTIME_KEY in st.session_state:
-        runtime: OrchestratorRuntime = st.session_state[_RUNTIME_KEY]
+    runtime: Optional[OrchestratorRuntime] = st.session_state.pop(_RUNTIME_KEY, None)
+    if runtime is not None:
         runtime.shutdown()
-        st.session_state.pop(_RUNTIME_KEY, None)
+    try:
+        _get_shared_runtime.clear()  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - cache cleanup best effort
+        pass
+    st.session_state.pop("_runtime_restore_reported", None)
     st.session_state.pop(_GLOBAL_CONFIG_KEY, None)
 
 

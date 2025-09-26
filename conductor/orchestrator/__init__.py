@@ -78,6 +78,7 @@ class CronSchedule:
 class FlowExecution:
     """Result of a single flow execution triggered by the orchestrator."""
 
+    id: str
     flow_name: str
     results: List[FlowResult]
     payload: Any = None
@@ -159,8 +160,19 @@ class FlowHandle:
     def global_config(self) -> GlobalConfig:
         return self._registration.deployment.global_config
 
-    async def run(self, payload: Any = None, *, metadata: Optional[Dict[str, Any]] = None) -> FlowExecution:
-        return await self._orchestrator.run_flow(self.name, payload=payload, metadata=metadata)
+    async def run(
+        self,
+        payload: Any = None,
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
+        run_id: Optional[str] = None,
+    ) -> FlowExecution:
+        return await self._orchestrator.run_flow(
+            self.name,
+            payload=payload,
+            metadata=metadata,
+            run_id=run_id,
+        )
 
     def run_in_background(
         self,
@@ -168,12 +180,14 @@ class FlowHandle:
         *,
         metadata: Optional[Dict[str, Any]] = None,
         schedule_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> asyncio.Task[FlowExecution]:
         return self._orchestrator.run_flow_in_background(
             self.name,
             payload=payload,
             metadata=metadata,
             schedule_id=schedule_id,
+            run_id=run_id,
         )
 
     def schedule(
@@ -199,10 +213,35 @@ class FlowHandle:
         )
 
 
+ExecutionStartCallback = Callable[
+    [
+        str,
+        str,
+        Optional[asyncio.Task["FlowExecution"]],
+        Any,
+        Dict[str, Any],
+        Optional[str],
+        datetime,
+    ],
+    None,
+]
+ExecutionSuccessCallback = Callable[["FlowExecution"], None]
+ExecutionErrorCallback = Callable[[str, str, Any, Dict[str, Any], Optional[str], datetime, datetime, BaseException], None]
+ExecutionCancelledCallback = Callable[[str, str, Any, Dict[str, Any], Optional[str], datetime, datetime], None]
+
+
 class FlowOrchestrator:
     """Register, execute, and schedule flows backed by :class:`FlowExecutor`."""
 
-    def __init__(self, *, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        *,
+        logger: Optional[logging.Logger] = None,
+        on_execution_start: Optional[ExecutionStartCallback] = None,
+        on_execution_success: Optional[ExecutionSuccessCallback] = None,
+        on_execution_error: Optional[ExecutionErrorCallback] = None,
+        on_execution_cancelled: Optional[ExecutionCancelledCallback] = None,
+    ):
         self.logger = logger or logging.getLogger("conductor.orchestrator")
         self._flows: Dict[str, FlowRegistration] = {}
         self._handles: Dict[str, FlowHandle] = {}
@@ -212,6 +251,10 @@ class FlowOrchestrator:
         self._scheduler_task: Optional[asyncio.Task[None]] = None
         self._wake_event: Optional[asyncio.Event] = None
         self._running_scheduler = False
+        self._on_execution_start = on_execution_start
+        self._on_execution_success = on_execution_success
+        self._on_execution_error = on_execution_error
+        self._on_execution_cancelled = on_execution_cancelled
 
     # ------------------------------------------------------------------
     # Flow registration
@@ -283,9 +326,16 @@ class FlowOrchestrator:
         *,
         metadata: Optional[Dict[str, Any]] = None,
         schedule_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> FlowExecution:
         registration = self._get_registration(name)
-        return await self._execute_flow(registration, payload, metadata=metadata, schedule_id=schedule_id)
+        return await self._execute_flow(
+            registration,
+            payload,
+            metadata=metadata,
+            schedule_id=schedule_id,
+            run_id=run_id,
+        )
 
     def run_flow_in_background(
         self,
@@ -294,11 +344,18 @@ class FlowOrchestrator:
         *,
         metadata: Optional[Dict[str, Any]] = None,
         schedule_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> asyncio.Task[FlowExecution]:
         registration = self._get_registration(name)
         loop = asyncio.get_running_loop()
         task = loop.create_task(
-            self._execute_flow(registration, payload, metadata=metadata, schedule_id=schedule_id)
+            self._execute_flow(
+                registration,
+                payload,
+                metadata=metadata,
+                schedule_id=schedule_id,
+                run_id=run_id,
+            )
         )
         self._track_task(registration, task)
         return task
@@ -309,8 +366,11 @@ class FlowOrchestrator:
         payload: Any = None,
         *,
         metadata: Optional[Dict[str, Any]] = None,
+        run_id: Optional[str] = None,
     ) -> FlowExecution:
-        return asyncio.run(self.run_flow(name, payload=payload, metadata=metadata))
+        return asyncio.run(
+            self.run_flow(name, payload=payload, metadata=metadata, run_id=run_id)
+        )
 
     async def wait_for(self, *names: str) -> List[FlowExecution]:
         tasks: Iterable[asyncio.Task[FlowExecution]]
@@ -421,28 +481,88 @@ class FlowOrchestrator:
         *,
         metadata: Optional[Dict[str, Any]] = None,
         schedule_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> FlowExecution:
+        run_identifier = run_id or uuid.uuid4().hex
         started_at = _utcnow()
-        metadata = dict(metadata or {})
+        metadata_dict = dict(metadata or {})
+        task = asyncio.current_task()
+        if self._on_execution_start is not None:
+            try:
+                self._on_execution_start(
+                    run_identifier,
+                    registration.name,
+                    task,
+                    payload,
+                    dict(metadata_dict),
+                    schedule_id,
+                    started_at,
+                )
+            except Exception:  # pragma: no cover - callback errors should not break execution
+                self.logger.exception("Execution start callback failed for flow '%s'", registration.name)
+
         configure_logging(registration.deployment.global_config)
-        async with registration.create_executor() as executor:
-            results = await executor.run(initial_payload=payload)
-            trace = executor.trace
-        finished_at = _utcnow()
-        execution = FlowExecution(
-            flow_name=registration.name,
-            results=results,
-            payload=payload,
-            trace=trace,
-            started_at=started_at,
-            finished_at=finished_at,
-            schedule_id=schedule_id,
-            metadata=metadata,
-        )
-        self.logger.debug(
-            "Flow '%s' finished in %.3fs", registration.name, (finished_at - started_at).total_seconds()
-        )
-        return execution
+        try:
+            async with registration.create_executor() as executor:
+                results = await executor.run(initial_payload=payload)
+                trace = executor.trace
+        except asyncio.CancelledError:
+            finished_at = _utcnow()
+            if self._on_execution_cancelled is not None:
+                try:
+                    self._on_execution_cancelled(
+                        run_identifier,
+                        registration.name,
+                        payload,
+                        dict(metadata_dict),
+                        schedule_id,
+                        started_at,
+                        finished_at,
+                    )
+                except Exception:  # pragma: no cover - defensive callback handling
+                    self.logger.exception("Execution cancelled callback failed for flow '%s'", registration.name)
+            raise
+        except Exception as exc:
+            finished_at = _utcnow()
+            if self._on_execution_error is not None:
+                try:
+                    self._on_execution_error(
+                        run_identifier,
+                        registration.name,
+                        payload,
+                        dict(metadata_dict),
+                        schedule_id,
+                        started_at,
+                        finished_at,
+                        exc,
+                    )
+                except Exception:  # pragma: no cover - defensive callback handling
+                    self.logger.exception("Execution error callback failed for flow '%s'", registration.name)
+            raise
+        else:
+            finished_at = _utcnow()
+            execution = FlowExecution(
+                id=run_identifier,
+                flow_name=registration.name,
+                results=results,
+                payload=payload,
+                trace=trace,
+                started_at=started_at,
+                finished_at=finished_at,
+                schedule_id=schedule_id,
+                metadata=metadata_dict,
+            )
+            if self._on_execution_success is not None:
+                try:
+                    self._on_execution_success(execution)
+                except Exception:  # pragma: no cover - defensive callback handling
+                    self.logger.exception("Execution success callback failed for flow '%s'", registration.name)
+            self.logger.debug(
+                "Flow '%s' finished in %.3fs",
+                registration.name,
+                (finished_at - started_at).total_seconds(),
+            )
+            return execution
 
     def _track_task(self, registration: FlowRegistration, task: asyncio.Task[FlowExecution]) -> None:
         task_set = self._active_tasks.setdefault(registration.name, set())

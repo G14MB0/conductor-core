@@ -184,8 +184,11 @@ class OrchestratorRuntime:
         execution = self._run_coroutine(
             self._run_flow_once(name, payload, metadata, schedule_id)
         )
-        summary = self._summarise_execution(execution, default_status="completed")
-        self._record_summary(summary)
+        summary = self._summarise_execution(
+            execution,
+            run_id=execution.id,
+            default_status="completed",
+        )
         return summary
 
     def schedule_flow(
@@ -284,7 +287,12 @@ class OrchestratorRuntime:
     # ------------------------------------------------------------------
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
-        self._orchestrator = FlowOrchestrator()
+        self._orchestrator = FlowOrchestrator(
+            on_execution_start=self._handle_execution_start,
+            on_execution_success=self._handle_execution_success,
+            on_execution_error=self._handle_execution_error,
+            on_execution_cancelled=self._handle_execution_cancelled,
+        )
         self._ready.set()
         self._loop.run_forever()
         pending = asyncio.all_tasks(loop=self._loop)
@@ -325,6 +333,7 @@ class OrchestratorRuntime:
                 payload=payload,
                 metadata=metadata,
                 schedule_id=schedule_id,
+                run_id=run_id,
             )
             entry = _RunEntry(
                 id=run_id,
@@ -336,46 +345,6 @@ class OrchestratorRuntime:
                 schedule_id=schedule_id,
             )
             self._active_runs[run_id] = entry
-
-            def _done_callback(fut: asyncio.Future[FlowExecution]) -> None:
-                finished_at = datetime.now(timezone.utc)
-                try:
-                    execution = fut.result()
-                    summary = self._summarise_execution(
-                        execution,
-                        run_id=run_id,
-                    )
-                except asyncio.CancelledError:
-                    duration = (finished_at - entry.started_at).total_seconds()
-                    summary = RunSummary(
-                        id=run_id,
-                        flow_name=name,
-                        status="cancelled",
-                        started_at=entry.started_at,
-                        finished_at=finished_at,
-                        duration=duration,
-                        schedule_id=entry.schedule_id,
-                        payload_preview=entry.payload,
-                        metadata=dict(entry.metadata),
-                        error="Run cancelled",
-                    )
-                except Exception as exc:  # pragma: no cover - surfaced in UI
-                    duration = (finished_at - entry.started_at).total_seconds()
-                    summary = RunSummary(
-                        id=run_id,
-                        flow_name=name,
-                        status="error",
-                        started_at=entry.started_at,
-                        finished_at=finished_at,
-                        duration=duration,
-                        schedule_id=entry.schedule_id,
-                        payload_preview=entry.payload,
-                        metadata=dict(entry.metadata),
-                        error=str(exc),
-                    )
-                self._completed.put((run_id, summary))
-
-            task.add_done_callback(_done_callback)
             return RunSummary(
                 id=run_id,
                 flow_name=name,
@@ -404,6 +373,103 @@ class OrchestratorRuntime:
             metadata=metadata,
             schedule_id=schedule_id,
         )
+
+    def _handle_execution_start(
+        self,
+        run_id: str,
+        flow_name: str,
+        task: Optional[asyncio.Task[FlowExecution]],
+        payload: Any,
+        metadata: Dict[str, Any],
+        schedule_id: Optional[str],
+        started_at: datetime,
+    ) -> None:
+        loop_task = task or asyncio.current_task()
+        if loop_task is None:
+            return
+        metadata_copy = dict(metadata or {})
+        entry = self._active_runs.get(run_id)
+        if entry is None:
+            entry = _RunEntry(
+                id=run_id,
+                flow_name=flow_name,
+                task=loop_task,
+                started_at=started_at,
+                payload=payload,
+                metadata=metadata_copy,
+                schedule_id=schedule_id,
+            )
+            self._active_runs[run_id] = entry
+        else:
+            entry.task = loop_task
+            entry.started_at = started_at
+            entry.payload = payload
+            entry.metadata = metadata_copy
+            entry.schedule_id = schedule_id
+
+    def _handle_execution_success(self, execution: FlowExecution) -> None:
+        summary = self._summarise_execution(
+            execution,
+            run_id=execution.id,
+            default_status="completed",
+        )
+        self._active_runs.pop(execution.id, None)
+        self._completed.put((execution.id, summary))
+
+    def _handle_execution_error(
+        self,
+        run_id: str,
+        flow_name: str,
+        payload: Any,
+        metadata: Dict[str, Any],
+        schedule_id: Optional[str],
+        started_at: datetime,
+        finished_at: datetime,
+        error: BaseException,
+    ) -> None:
+        metadata_copy = dict(metadata or {})
+        duration = (finished_at - started_at).total_seconds()
+        summary = RunSummary(
+            id=run_id,
+            flow_name=flow_name,
+            status="error",
+            started_at=started_at,
+            finished_at=finished_at,
+            duration=duration,
+            schedule_id=schedule_id,
+            payload_preview=payload,
+            metadata=metadata_copy,
+            error=str(error),
+        )
+        self._active_runs.pop(run_id, None)
+        self._completed.put((run_id, summary))
+
+    def _handle_execution_cancelled(
+        self,
+        run_id: str,
+        flow_name: str,
+        payload: Any,
+        metadata: Dict[str, Any],
+        schedule_id: Optional[str],
+        started_at: datetime,
+        finished_at: datetime,
+    ) -> None:
+        metadata_copy = dict(metadata or {})
+        duration = (finished_at - started_at).total_seconds()
+        summary = RunSummary(
+            id=run_id,
+            flow_name=flow_name,
+            status="cancelled",
+            started_at=started_at,
+            finished_at=finished_at,
+            duration=duration,
+            schedule_id=schedule_id,
+            payload_preview=payload,
+            metadata=metadata_copy,
+            error="Run cancelled",
+        )
+        self._active_runs.pop(run_id, None)
+        self._completed.put((run_id, summary))
 
     def _summarise_execution(
         self,
