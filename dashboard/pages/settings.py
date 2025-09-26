@@ -20,7 +20,7 @@ from dashboard.state import (
 from dashboard.ui import ensure_wide_layout
 
 
-ensure_wide_layout(title="Conductor ? Impostazioni")
+ensure_wide_layout(title="Conductor - Impostazioni")
 
 def render() -> None:
     state = get_global_config_state()

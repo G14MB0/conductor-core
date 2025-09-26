@@ -11,7 +11,7 @@ from dashboard.ui import ensure_wide_layout
 import streamlit.components.v1 as components
 
 
-ensure_wide_layout(title="Conductor ? Operazioni")
+ensure_wide_layout(title="Conductor - Operazioni")
 
 
 def render(runtime: OrchestratorRuntime) -> None:
@@ -311,7 +311,7 @@ def _render_logs(runtime: OrchestratorRuntime) -> None:
     if snapshots_with_errors and not snapshots_with_content:
         error_messages = {snapshot.error for snapshot in snapshots_with_errors if snapshot.error}
         if error_messages and all("docker cli" in message.lower() for message in error_messages):
-            st.info("La raccolta dei log dei container ? disabilitata perch? la CLI Docker non ? disponibile nel container dashboard.")
+            st.info("La raccolta dei log dei container è disabilitata perché la CLI Docker non è disponibile nel container dashboard.")
             return
 
     for snapshot in container_logs:
