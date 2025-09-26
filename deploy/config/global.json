@@ -10,19 +10,7 @@
     "method": "POST",
     "enabled": false
   },
-  "container_registries": [
-    "docker.io"
-  ],
   "process_pool_size": 2,
-  "max_concurrency": 4,
-  "resource_locations": {
-    "flows": {
-      "type": "filesystem",
-      "location": "/etc/conductor/flows"
-    },
-    "payloads": {
-      "type": "filesystem",
-      "location": "/etc/conductor/payloads"
-    }
-  }
+  "max_concurrency": 4
 }
+

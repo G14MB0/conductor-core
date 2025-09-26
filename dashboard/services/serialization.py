@@ -5,11 +5,14 @@ import json
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from conductor.config import (
+    ContainerRegistryConfig,
     FlowConfig,
+    FlowRuntimeConfig,
     GlobalConfig,
     NodeDefinition,
     RepositoryLocation,
     RemoteLoggingConfig,
+    SecretConfig,
 )
 
 
@@ -63,22 +66,12 @@ def _node_to_mapping(node: NodeDefinition) -> Dict[str, Any]:
 def global_config_to_dict(config: GlobalConfig) -> Dict[str, Any]:
     data: Dict[str, Any] = {
         "env": dict(config.env),
-        "container_registries": list(config.container_registries),
         "max_concurrency": config.max_concurrency,
         "process_pool_size": config.process_pool_size,
         "shared_state": dict(config.shared_state),
-        "dependencies": list(config.dependencies),
     }
     if config.remote_logging:
         data["remote_logging"] = _remote_logging_to_dict(config.remote_logging)
-    if config.resource_locations:
-        data["resource_locations"] = repository_locations_to_mapping(
-            config.resource_locations
-        )
-    if config.code_locations:
-        data["code_locations"] = repository_locations_to_mapping(
-            config.code_locations
-        )
     if config.extra:
         data.update(config.extra)
     return data
@@ -92,6 +85,78 @@ def _remote_logging_to_dict(config: RemoteLoggingConfig) -> Dict[str, Any]:
         "enabled": config.enabled,
         "verify": config.verify,
     }
+
+
+def runtime_config_to_dict(config: FlowRuntimeConfig) -> Dict[str, Any]:
+    data: Dict[str, Any] = {}
+    if config.resource_locations:
+        data["resource_locations"] = repository_locations_to_mapping(config.resource_locations)
+    if config.code_locations:
+        data["code_locations"] = repository_locations_to_mapping(config.code_locations)
+    if config.container_registries:
+        data["container_registries"] = container_registries_to_mapping(config.container_registries)
+    if config.secrets:
+        data["secrets"] = secrets_to_mapping(config.secrets)
+    if config.flow_definition:
+        data["flow_definition"] = config.flow_definition
+    if config.callables:
+        data["callables"] = list(config.callables)
+    if config.extra:
+        data.update(config.extra)
+    return data
+
+
+def runtime_config_from_dict(data: Mapping[str, Any] | None) -> FlowRuntimeConfig:
+    if not data:
+        return FlowRuntimeConfig()
+    return FlowRuntimeConfig.from_mapping(data)
+
+
+def container_registry_to_dict(registry: ContainerRegistryConfig) -> Dict[str, Any]:
+    data: Dict[str, Any] = {
+        "url": registry.url,
+    }
+    if registry.username:
+        data["username"] = registry.username
+    if registry.password:
+        data["password"] = registry.password
+    if registry.token:
+        data["token"] = registry.token
+    if registry.password_secret:
+        data["password_secret"] = registry.password_secret
+    if registry.token_secret:
+        data["token_secret"] = registry.token_secret
+    if registry.verify is not None:
+        data["verify"] = registry.verify
+    if registry.extra:
+        data.update(registry.extra)
+    return data
+
+
+def container_registries_to_mapping(
+    registries: Mapping[str, ContainerRegistryConfig]
+) -> Dict[str, Any]:
+    return {name: container_registry_to_dict(registry) for name, registry in registries.items()}
+
+
+def secret_to_dict(secret: SecretConfig) -> Dict[str, Any]:
+    data: Dict[str, Any] = {
+        "type": secret.type,
+    }
+    if secret.value is not None:
+        data["value"] = secret.value
+    if secret.env:
+        data["env"] = secret.env
+    if secret.file:
+        data["file"] = secret.file
+    if secret.metadata:
+        data["metadata"] = dict(secret.metadata)
+    return data
+
+
+def secrets_to_mapping(secrets: Mapping[str, SecretConfig]) -> Dict[str, Any]:
+    return {name: secret_to_dict(secret) for name, secret in secrets.items()}
+
 
 
 def repository_locations_to_mapping(
@@ -193,7 +258,14 @@ def _load_json_field(value: Any, *, field_name: str) -> Dict[str, Any]:
 __all__ = [
     "flow_config_to_dict",
     "global_config_to_dict",
+    "runtime_config_to_dict",
+    "runtime_config_from_dict",
+    "container_registry_to_dict",
+    "container_registries_to_mapping",
+    "secret_to_dict",
+    "secrets_to_mapping",
     "repository_locations_to_rows",
     "rows_to_repository_locations",
     "repository_location_to_dict",
+    "repository_locations_to_mapping",
 ]

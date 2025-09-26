@@ -11,21 +11,30 @@ import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
-from .config import GlobalConfig, RepositoryLocation
+from .config import FlowRuntimeConfig, GlobalConfig, RepositoryLocation
 
 
 class ResourceResolver:
-    """Resolve files and code locations declared in :class:`GlobalConfig`."""
+    """Resolve files and code locations declared for a flow deployment."""
 
-    def __init__(self, config: GlobalConfig, *, cache_root: Optional[Path] = None):
-        self._config = config
+    def __init__(
+        self,
+        global_config: GlobalConfig,
+        runtime_config: Optional[FlowRuntimeConfig] = None,
+        *,
+        cache_root: Optional[Path] = None,
+    ) -> None:
+        self._global_config = global_config
+        self._runtime_config = runtime_config or FlowRuntimeConfig()
         self._stack = contextlib.ExitStack()
         self._temp_dir: Optional[Path] = None
-        self._cache_root = Path(
+        cache_hint = (
             cache_root
-            or config.extra.get("resource_cache_dir")
+            or self._runtime_config.extra.get("resource_cache_dir")
+            or self._global_config.extra.get("resource_cache_dir")
             or (Path.home() / ".conductor" / "sources")
-        ).expanduser()
+        )
+        self._cache_root = Path(cache_hint).expanduser()
         self._cache_root.mkdir(parents=True, exist_ok=True)
 
     def __enter__(self) -> "ResourceResolver":
@@ -68,8 +77,8 @@ class ResourceResolver:
         if scheme in {"http", "https", "ftp"}:
             return self._download_url(identifier)
 
-        if scheme in self._config.resource_locations:
-            location = self._config.resource_locations[scheme]
+        if scheme in self._runtime_config.resource_locations:
+            location = self._runtime_config.resource_locations[scheme]
             return self._resolve_from_location(location, parsed)
 
         raise ValueError(
@@ -80,7 +89,7 @@ class ResourceResolver:
         """Return filesystem paths for configured code locations keyed by their alias."""
 
         paths: Dict[str, Path] = {}
-        for name, location in self._config.code_locations.items():
+        for name, location in self._runtime_config.code_locations.items():
             root = self._repository_root(location)
             if isinstance(root, str):
                 raise ValueError(
@@ -105,7 +114,7 @@ class ResourceResolver:
         relative = self._relative_from_parsed(parsed)
         if location.kind in {"filesystem", "git"}:
             root = self._repository_root(location)
-            if isinstance(root, str):  # pragma: no cover - defensive
+            if isinstance(root, str):
                 raise ValueError(
                     f"Repository '{location.name}' of type '{location.kind}' did not resolve to a local path."
                 )
@@ -143,21 +152,86 @@ class ResourceResolver:
     def _ensure_git_checkout(self, location: RepositoryLocation) -> Path:
         repo_dir = (self._cache_root / location.name).expanduser()
         repo_dir.parent.mkdir(parents=True, exist_ok=True)
+        remote_url, masks = self._git_remote_url(location)
         if not repo_dir.exists():
-            self._run_git(["clone", location.location, str(repo_dir)])
+            self._run_git(["clone", remote_url, str(repo_dir)], mask=masks)
         else:
-            self._run_git(["-C", str(repo_dir), "fetch", "--all", "--tags", "--prune"])
+            self._run_git(["-C", str(repo_dir), "fetch", "--all", "--tags", "--prune"], mask=masks)
         if location.reference:
             ref = location.reference
-            self._run_git(["-C", str(repo_dir), "checkout", ref])
+            self._run_git(["-C", str(repo_dir), "checkout", ref], mask=masks)
             try:
-                self._run_git(["-C", str(repo_dir), "pull", "--ff-only"])
+                self._run_git(["-C", str(repo_dir), "pull", "--ff-only"], mask=masks)
             except RuntimeError:
                 # Likely on a tag or detached commit; ignore pull failures.
                 pass
         return repo_dir.resolve()
 
-    def _run_git(self, args: list[str]) -> None:
+    def _git_remote_url(self, location: RepositoryLocation) -> tuple[str, list[str]]:
+        extras = location.extra
+        masks: list[str] = []
+
+        token = extras.get("token")
+        token_secret = extras.get("token_secret") or extras.get("tokenSecret")
+        if token_secret:
+            resolved = self._runtime_config.resolve_secret_value(str(token_secret))
+            if resolved:
+                token = resolved
+        if token:
+            masks.append(token)
+            return self._augment_url_with_token(location.location, token), masks
+
+        username = extras.get("username") or extras.get("user")
+        username_secret = extras.get("username_secret") or extras.get("usernameSecret")
+        if username_secret:
+            resolved = self._runtime_config.resolve_secret_value(str(username_secret))
+            if resolved:
+                username = resolved
+
+        password = extras.get("password")
+        password_secret = extras.get("password_secret") or extras.get("passwordSecret")
+        if password_secret:
+            resolved = self._runtime_config.resolve_secret_value(str(password_secret))
+            if resolved is not None:
+                password = resolved
+        if password:
+            masks.append(password)
+
+        if username or password:
+            return self._augment_url_with_credentials(location.location, username, password), masks
+
+        return location.location, masks
+
+    def _augment_url_with_token(self, url: str, token: str) -> str:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme not in {"http", "https"}:
+            return url
+        if "@" in parsed.netloc:
+            return url
+        safe_token = urllib.parse.quote(token, safe="")
+        netloc = f"{safe_token}@{parsed.netloc}"
+        return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+    def _augment_url_with_credentials(
+        self,
+        url: str,
+        username: Optional[str],
+        password: Optional[str],
+    ) -> str:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme not in {"http", "https"}:
+            return url
+        if "@" in parsed.netloc:
+            return url
+        if not username and not password:
+            return url
+        user_value = urllib.parse.quote(username or ("token" if password else ""), safe="")
+        if password is not None:
+            user_value = f"{user_value}:{urllib.parse.quote(password, safe='')}"
+        netloc = f"{user_value}@{parsed.netloc}"
+        return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+    def _run_git(self, args: list[str], *, mask: Optional[list[str]] = None) -> None:
         command = ["git", *args]
         result = subprocess.run(
             command,
@@ -167,8 +241,15 @@ class ResourceResolver:
             check=False,
         )
         if result.returncode != 0:
+            message = result.stderr.strip() or result.stdout.strip() or ""
+            command_display = " ".join(command)
+            if mask:
+                for secret in mask:
+                    if secret:
+                        message = message.replace(secret, "***")
+                        command_display = command_display.replace(secret, "***")
             raise RuntimeError(
-                f"Git command '{' '.join(command)}' failed with exit code {result.returncode}: {result.stderr.strip()}"
+                f"Git command '{command_display}' failed with exit code {result.returncode}: {message}"
             )
 
     def _relative_from_parsed(self, parsed: urllib.parse.ParseResult) -> Path:
@@ -216,6 +297,5 @@ class ResourceResolver:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         return target
-
 
 __all__ = ["ResourceResolver"]

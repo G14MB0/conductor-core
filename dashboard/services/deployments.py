@@ -1,7 +1,8 @@
-﻿"""Helpers for building flow deployments from local uploads or Git repositories."""
+"""Helpers for building flow deployments from local uploads or Git repositories."""
 from __future__ import annotations
 
 import io
+import json
 import logging
 import shutil
 import subprocess
@@ -9,14 +10,24 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from conductor.config import (
+    FlowConfig,
     FlowDeployment,
+    FlowRuntimeConfig,
     GlobalConfig,
     RepositoryLocation,
+    SecretConfig,
     load_flow_config,
     load_global_config,
+)
+
+from dashboard.services.serialization import (
+    flow_config_to_dict,
+    global_config_to_dict,
+    runtime_config_from_dict,
+    runtime_config_to_dict,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -24,6 +35,71 @@ LOGGER = logging.getLogger(__name__)
 _STORAGE_ROOT = Path(__file__).resolve().parent.parent / "storage"
 _LOCAL_ROOT = _STORAGE_ROOT / "local"
 _GIT_ROOT = _STORAGE_ROOT / "git"
+
+
+
+_DEPLOYMENTS_DIR = _STORAGE_ROOT / "deployments"
+
+
+def _ensure_deployments_dir() -> Path:
+    path = _DEPLOYMENTS_DIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _deployment_file(name: str) -> Path:
+    slug = _slugify(name)
+    return _ensure_deployments_dir() / f"{slug}.json"
+
+
+def save_deployment(deployment: FlowDeployment) -> Path:
+    """Persist a deployment so it can be restored on the next dashboard session."""
+
+    payload = {
+        "name": deployment.resolved_name(),
+        "flow": flow_config_to_dict(deployment.flow),
+        "global_config": global_config_to_dict(deployment.global_config),
+        "runtime_config": runtime_config_to_dict(deployment.runtime_config),
+        "metadata": dict(deployment.metadata),
+    }
+    target = _deployment_file(deployment.resolved_name())
+    target.write_text(json.dumps(payload, indent=2))
+    return target
+
+
+def remove_saved_deployment(name: str) -> None:
+    """Delete a persisted deployment if it exists."""
+
+    path = _deployment_file(name)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def load_saved_deployments() -> Dict[str, FlowDeployment]:
+    """Load deployments stored on disk."""
+
+    deployments: Dict[str, FlowDeployment] = {}
+    directory = _ensure_deployments_dir()
+    for file in directory.glob("*.json"):
+        try:
+            data = json.loads(file.read_text())
+            flow_cfg = FlowConfig.from_mapping(data["flow"])
+            global_cfg = GlobalConfig.from_mapping(data["global_config"])
+            runtime_cfg = runtime_config_from_dict(data.get("runtime_config"))
+            name = data.get("name") or flow_cfg.name or file.stem
+            metadata = dict(data.get("metadata", {}))
+            deployments[name] = FlowDeployment(
+                flow=flow_cfg,
+                global_config=global_cfg,
+                runtime_config=runtime_cfg,
+                name=name,
+                metadata=metadata,
+            )
+        except Exception:
+            continue
+    return deployments
 
 
 @dataclass
@@ -44,6 +120,7 @@ class GitRepositorySnapshot:
     commit: str
     config_candidates: List[str]
     directories: List[str]
+    token: Optional[str] = None
 
     def resolve_path(self, relative: str) -> Path:
         """Resolve a repository-relative path safely inside the snapshot root."""
@@ -61,6 +138,7 @@ def prepare_local_deployment(
     global_filename: Optional[str] = None,
     code_archive: Optional[bytes] = None,
     code_filename: Optional[str] = None,
+    runtime_payload: Optional[Mapping[str, Any]] = None,
 ) -> DeploymentResult:
     """Materialise a :class:`FlowDeployment` from uploaded artefacts."""
 
@@ -90,34 +168,40 @@ def prepare_local_deployment(
         metadata["global_path"] = None
         metadata["global_source"] = "base"
 
-    code_locations: Dict[str, RepositoryLocation] = {}
+    runtime_config = FlowRuntimeConfig.from_mapping(runtime_payload or {})
+    runtime_config.flow_definition = metadata["flow_path"]
+
     if code_archive is not None:
         safe_code_name = _normalise_filename(code_filename or "code.zip", "code.zip")
         code_root = _ensure_directory(storage_root / "code" / slug)
         metadata["code_archive"] = safe_code_name
         extracted_root = _extract_zip_archive(code_archive, code_root)
         preferred_root = _default_code_root(extracted_root)
-        metadata["code_path"] = str(preferred_root)
+        code_path_str = str(preferred_root)
+        metadata["code_path"] = code_path_str
         location_key = f"{slug}-code"
-        code_locations[location_key] = RepositoryLocation.from_mapping(
+        runtime_config.code_locations[location_key] = RepositoryLocation.from_mapping(
             location_key,
             {
                 "type": "filesystem",
-                "location": str(preferred_root),
+                "location": code_path_str,
             },
         )
+        if code_path_str not in runtime_config.callables:
+            runtime_config.callables.append(code_path_str)
     else:
         metadata["code_archive"] = None
-        metadata["code_path"] = None
+        metadata["code_path"] = metadata.get("code_path") or None
 
     deployment = FlowDeployment.from_components(
         flow_config,
         global_config=global_config,
+        runtime_config=runtime_config,
         name=flow_name,
-        code_locations=code_locations,
         metadata=metadata,
     )
     return DeploymentResult(deployment=deployment, metadata=metadata)
+
 
 
 def prime_git_repository(
@@ -169,6 +253,7 @@ def prime_git_repository(
         commit=commit,
         config_candidates=config_candidates,
         directories=directories,
+        token=token,
     )
     return metadata
 
@@ -181,6 +266,7 @@ def build_deployment_from_git(
     flow_name: Optional[str] = None,
     global_config_path: Optional[str] = None,
     code_paths: Optional[Sequence[str]] = None,
+    runtime_payload: Optional[Mapping[str, Any]] = None,
 ) -> DeploymentResult:
     """Build a deployment from a cloned repository snapshot."""
 
@@ -206,28 +292,58 @@ def build_deployment_from_git(
         global_config = base_config
         metadata["global_origin"] = "base"
 
-    code_locations: Dict[str, RepositoryLocation] = {}
+    runtime_config = FlowRuntimeConfig.from_mapping(runtime_payload or {})
+    runtime_config.flow_definition = flow_path
+
+    slug = _slugify(flow_name or flow_config.name or "flow")
+
+    token_secret_name: Optional[str] = None
+    if snapshot.token:
+        secret_name = f"{slug}-git-token"
+        if secret_name not in runtime_config.secrets:
+            runtime_config.secrets[secret_name] = SecretConfig(
+                name=secret_name,
+                value=snapshot.token,
+                type="git",
+            )
+        token_secret_name = secret_name
+
+    repo_location_key = f"{slug}-repo"
+    if repo_location_key not in runtime_config.resource_locations:
+        payload: Dict[str, Any] = {
+            "type": "git",
+            "location": snapshot.repo_url,
+            "reference": snapshot.commit,
+        }
+        if token_secret_name:
+            payload["token_secret"] = token_secret_name
+        runtime_config.resource_locations[repo_location_key] = RepositoryLocation.from_mapping(
+            repo_location_key,
+            payload,
+        )
+
     selected_paths = list(code_paths or [])
     if selected_paths:
-        slug = _slugify(flow_name or flow_config.name or "flow")
         total = len(selected_paths)
         for idx, rel_path in enumerate(selected_paths, start=1):
             key = f"{slug}-code" if total == 1 else f"{slug}-code-{idx}"
-            code_locations[key] = RepositoryLocation.from_mapping(
-                key,
-                {
-                    "type": "git",
-                    "location": snapshot.repo_url,
-                    "reference": snapshot.commit,
-                    "subpath": rel_path,
-                },
-            )
+            payload: Dict[str, Any] = {
+                "type": "git",
+                "location": snapshot.repo_url,
+                "reference": snapshot.commit,
+                "subpath": rel_path,
+            }
+            if token_secret_name:
+                payload["token_secret"] = token_secret_name
+            runtime_config.code_locations[key] = RepositoryLocation.from_mapping(key, payload)
+            if rel_path not in runtime_config.callables:
+                runtime_config.callables.append(rel_path)
 
     deployment = FlowDeployment.from_components(
         flow_config,
         global_config=global_config,
+        runtime_config=runtime_config,
         name=flow_name,
-        code_locations=code_locations,
         metadata=metadata,
     )
     return DeploymentResult(deployment=deployment, metadata=metadata)
@@ -330,7 +446,7 @@ def _run_git(
             timeout=timeout,
         )
     except FileNotFoundError as exc:  # pragma: no cover - dependency missing
-        raise RuntimeError("Git non � installato sul server.") from exc
+        raise RuntimeError("Git non e' installato sul server.") from exc
     except subprocess.CalledProcessError as exc:
         message = exc.stderr.strip() or exc.stdout.strip() or str(exc)
         if token:
@@ -385,5 +501,9 @@ __all__ = [
     "prepare_local_deployment",
     "prime_git_repository",
     "build_deployment_from_git",
+    "save_deployment",
+    "remove_saved_deployment",
+    "load_saved_deployments",
 ]
+
 

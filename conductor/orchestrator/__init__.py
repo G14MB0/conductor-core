@@ -100,7 +100,12 @@ class FlowRegistration:
 
     def create_executor(self) -> FlowExecutor:
         deployment = self.deployment
-        return FlowExecutor(deployment.flow, deployment.global_config, logger=self.logger)
+        return FlowExecutor(
+            deployment.flow,
+            deployment.global_config,
+            deployment.runtime_config,
+            logger=self.logger,
+        )
 
 
 @dataclass(order=True)

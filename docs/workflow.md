@@ -41,16 +41,15 @@ sudo chown -R $USER:$USER /srv/conductor
 
 ## 4. Author the global configuration
 
-Create `/srv/conductor/config/global.json` with the runtime settings. The
-example below shows how to declare remote repositories, dependencies, and other
-options.
+Create `/srv/conductor/config/global.json` with the runtime defaults shared by
+all flows. The global file no longer carries repository information or
+per-deployment secrets - those live alongside each flow.
 
 ```jsonc
 {
   "env": {
     "EXAMPLE_FLAG": "enabled"
   },
-  "dependencies": ["requests==2.31.0"],
   "remote_logging": {
     "target": "https://logs.example.com/ingest",
     "method": "POST",
@@ -63,75 +62,80 @@ options.
   "shared_state": {
     "start_invocations": 0
   },
-  "resource_locations": {
-    "flows": {
-      "type": "git",
-      "url": "https://github.com/acme/conductor-assets.git",
-      "reference": "main",
-      "subpath": "flows"
-    },
-    "payloads": {
-      "type": "http",
-      "url": "https://assets.example.com/conductor/payloads"
-    }
-  },
-  "code_locations": {
-    "nodes": {
-      "type": "git",
-      "url": "https://github.com/acme/conductor-nodes.git",
-      "reference": "prod",
-      "subpath": "src"
-    }
-  },
-  "resource_cache_dir": "/root/.conductor/sources"
+  "process_pool_size": 2,
+  "max_concurrency": 4
 }
 ```
 
 Key fields:
 
-- `dependencies`: pip packages installed by the container entrypoint before the
-  flow runs (honours `CONDUCTOR_PIP_EXTRA_ARGS` for custom indexes or auth).
-- `remote_logging`: ship structured events to an external endpoint. Provide a
-  `target` URL, optional `method`/`headers`, and toggle TLS verification with
-  `verify`. Leave `enabled` as `true` to activate remote delivery.
-- `resource_locations`: alias remote flows/payloads. Supported types:
-  - `filesystem`: absolute path on the container filesystem (`/etc/conductor` is
-    mounted read-only by default).
-  - `git`: cloned into `/root/.conductor/sources/<name>` and optionally checked
-    out at a specific branch, tag, or commit (`reference`).
-  - `http`: downloaded via HTTPS/HTTP/FTP. Provide `headers` to include auth
-    tokens when required.
-- `code_locations`: same structure as `resource_locations`, and each location is
-  added to `sys.path` so your inline/process nodes can resolve their modules.
+- env: environment variables exported before the flow starts.
+- remote_logging: ship structured events to an external endpoint. Provide a target URL, optional method/headers, and toggle TLS verification with `verify`. Leave `enabled` as `true` to activate remote delivery.
+- shared_state: initial values written into the shared state proxy. Nodes can mutate these values via `conductor.global_state.get_global_state()`.
+- process_pool_size / max_concurrency: tune the execution engine when running process-based or highly parallel flows. Set either value to `null` to let Conductor choose defaults automatically.
 
-### Private repositories
-
-- **Git over HTTPS:** embed a limited-scope personal access token in the URL,
-  e.g. `https://x-access-token:<token>@github.com/acme/private-nodes.git`.
-- **Git over SSH:** mount an SSH key directory into the container and set
-  `GIT_SSH_COMMAND` via `env` in the global config or Compose file. Ensure the
-  key has read-only access.
-- **Authenticated HTTP endpoints:** include `"headers": {"Authorization": "Bearer <token>"}`
-  on the repository entry.
+All artefact locations, container registries, and secrets are defined in the
+flow-specific runtime configuration described in the next section.
 
 ## 5. Organise flow and payload sources
 
-You have two main options:
+Author a runtime configuration for each flow under `/srv/conductor/config/flows`
+(or a similar directory). This file complements the flow definition by describing
+where assets live and which credentials the orchestrator should use.
 
-1. **Bundled with the container:** place flow definitions and payload seeds
-   under `/srv/conductor/config/flows` (or similar) and refer to them with a
-   `filesystem` repository, e.g. `"flows": {"type": "filesystem", "path": "/etc/conductor/flows"}`.
-2. **Remote repository:** commit flows and payloads to a git or HTTP location as
-   shown in the `resource_locations` example. Update your CI/CD pipeline to push
-   changes to those repos so the runtime always pulls the latest definition.
+```jsonc
+{
+  "resource_locations": {
+    "flows": {
+      "type": "git",
+      "location": "https://github.com/acme/conductor-assets.git",
+      "reference": "main",
+      "subpath": "flows",
+      "token_secret": "git-token"
+    },
+    "payloads": {
+      "type": "http",
+      "location": "https://assets.example.com/conductor/payloads"
+    }
+  },
+  "code_locations": {
+    "nodes": {
+      "type": "git",
+      "location": "https://github.com/acme/conductor-nodes.git",
+      "reference": "prod",
+      "subpath": "src",
+      "token_secret": "git-token"
+    }
+  },
+  "container_registries": {
+    "dockerhub": {
+      "url": "https://registry-1.docker.io",
+      "token_secret": "dockerhub-token"
+    }
+  },
+  "secrets": {
+    "git-token": {"type": "git", "env": "GITHUB_TOKEN"},
+    "dockerhub-token": {"type": "docker", "value": "<personal-access-token>"}
+  },
+  "flow_definition": "flows/order-routing.json",
+  "callables": [
+    "nodes/order_routing.py"
+  ]
+}
+```
 
-Node implementations should live in `code_locations`. For git repositories,
-arrange the package structure so importing the callable path in your flow
-configuration works once the repo is added to `sys.path` (e.g. `src/conductor_nodes/foo.py`).
+Runtime configuration tips:
 
-### Node repository layout example
+- resource_locations: alias remote flow definitions or payload seeds. Supported types are `filesystem`, `git`, and `http`. Secrets referenced via `token_secret` or `password_secret` resolve from the secrets map.
+- code_locations: same structure as `resource_locations`; each entry is added to `sys.path` during execution so inline/process nodes can import their modules.
+- resource_cache_dir: override the directory used to cache cloned repositories (default `~/.conductor/sources`).
+- container_registries: base URLs for Docker images referenced by image fields.
+- secrets: resolve sensitive values via `value`, `env`, or `file`. The `type` attribute is informational and helps with tooling.
+- flow_definition: relative path to the flow file within a repository when you want the orchestrator to resolve it dynamically.
+- callables: optional hints pointing to Python modules or packages that should be added to `sys.path`.
 
-A typical git repository for code locations might look like:
+Arrange node repositories so importing the callable path in your flow definition
+works once the repo is added to `sys.path`. For example:
 
 ```text
 conductor-nodes/
@@ -140,18 +144,14 @@ conductor-nodes/
 |   |-- conductor_nodes/
 |       |-- __init__.py
 |       |-- common.py
-|       `-- flows/
+|       |-- flows/
 |           |-- __init__.py
-|           `-- order_processing.py
-`-- README.md
+|           |-- order_processing.py
+|-- README.md
 ```
 
-In your flow definition you would then reference callables such as
-`conductor_nodes.flows.order_processing:route_order`. Ensure `pyproject.toml` or
-`setup.cfg` declares the package under `[project]`/`[tool.setuptools]` so local
-testing mirrors the runtime import path. Any packages required by the repo
-should be listed in the global configuration `dependencies` or handled via your
-deployment pipeline.\n\n
+You can keep flow and payload files alongside the runtime configuration (use a `filesystem` alias) or push them to git/HTTP locations. Update your CI/CD pipeline to publish new commits so the orchestrator always pulls the latest versions.
+
 ## 6. Run with Docker Compose (recommended)
 
 Copy the provided template and adjust values:
@@ -199,7 +199,7 @@ sudo docker run --rm \
   -v /srv/conductor/cache:/root/.conductor \
   -e CONDUCTOR_GLOBAL_CONFIG=/etc/conductor/global.json \
   your-dockerhub-namespace/conductor:latest \
-  run --flow flows://order-routing.json --payload-file payloads://order-42.json
+  run --flow flows://order-routing.json --runtime-config /etc/conductor/flows/order-routing.runtime.json --payload-file payloads://order-42.json
 ```
 
 This command mounts the configuration, persists cache state, and executes the
@@ -218,6 +218,7 @@ sudo docker compose exec conductor bash
 # Inside the container shell
 python -m conductor.cli run \
   --global-config /etc/conductor/global.json \
+  --runtime-config /etc/conductor/flows/order-routing.runtime.json \
   --flow flows://order-routing.json \
   --payload-file payloads://order-42.json \
   --trace-file /tmp/order-trace.json
@@ -228,9 +229,7 @@ The resolver fetches remote artefacts automatically and adds `code_locations` to
 
 ## 9. Maintenance tips
 
-- **Dependency updates:** edit the `dependencies` array, then restart the
-  container. The entrypoint installs packages every time, so pin versions to
-  avoid surprises.
+- **Python packages:** bake required dependencies into the container image or install them as part of your deployment pipeline before launching the service.
 - **Cache hygiene:** purge `/srv/conductor/cache` if you need a clean checkout.
 - **Credentials:** keep tokens and SSH keys outside the repository; mount them
   via Compose secrets or environment variables. Restrict permissions to read-only.
@@ -240,9 +239,3 @@ The resolver fetches remote artefacts automatically and adds `code_locations` to
 Following these steps gives you a reproducible path from a clean Linux host to a
 fully configured Conductor deployment that sources flows and code from remote
 locations and installs runtime dependencies automatically.
-
-
-
-
-
-

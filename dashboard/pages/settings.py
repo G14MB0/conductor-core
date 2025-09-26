@@ -9,12 +9,8 @@ import streamlit as st
 
 from conductor.config import GlobalConfig, load_global_config
 
-from dashboard.services.git import test_git_connection
 from dashboard.services.serialization import (
     global_config_to_dict,
-    repository_location_to_dict,
-    repository_locations_to_rows,
-    rows_to_repository_locations,
 )
 from dashboard.state import (
     get_global_config_state,
@@ -90,9 +86,7 @@ def _loaders() -> None:
 def _editor(config: GlobalConfig) -> None:
     st.subheader("Modifica impostazioni")
     with st.form("global-config-form"):
-        general_tab, resources_tab, code_tab, logging_tab = st.tabs(
-            ["Generale", "Resource locations", "Code locations", "Remote logging"]
-        )
+        general_tab, logging_tab = st.tabs(["Generale", "Remote logging"])
         mapping: Dict[str, Any] = {}
         errors: List[str] = []
 
@@ -101,24 +95,6 @@ def _editor(config: GlobalConfig) -> None:
         mapping.update(general_data)
         errors.extend(general_errors)
 
-        with resources_tab:
-            resources_data, resources_errors = _locations_section(
-                config.resource_locations,
-                table_key="resource-locations",
-                empty_label="Nessuna resource location definita.",
-            )
-        mapping["resource_locations"] = resources_data
-        errors.extend(resources_errors)
-
-        with code_tab:
-            code_data, code_errors = _locations_section(
-                config.code_locations,
-                table_key="code-locations",
-                empty_label="Nessuna code location definita.",
-            )
-        mapping["code_locations"] = code_data
-        errors.extend(code_errors)
-
         with logging_tab:
             logging_data, logging_errors = _logging_section(config)
         if logging_data is not None:
@@ -126,23 +102,24 @@ def _editor(config: GlobalConfig) -> None:
         errors.extend(logging_errors)
 
         submitted = st.form_submit_button("Applica modifiche", type="primary")
-        if submitted:
-            if errors:
-                for err in errors:
-                    st.error(err)
-                st.stop()
-            try:
-                new_config = GlobalConfig.from_mapping(mapping)
-            except Exception as exc:  # pragma: no cover - UI feedback
-                st.error(f"Configurazione non valida: {exc}")
-            else:
-                state = get_global_config_state()
-                set_global_config(
-                    new_config,
-                    path=state.get("path"),
-                    dirty=True,
-                )
-                st.success("Impostazioni aggiornate. Ricordati di salvare su file.")
+        if not submitted:
+            return
+        if errors:
+            for err in errors:
+                st.error(err)
+            return
+        try:
+            new_config = GlobalConfig.from_mapping(mapping)
+        except Exception as exc:  # pragma: no cover - UI feedback
+            st.error(f"Configurazione non valida: {exc}")
+        else:
+            state = get_global_config_state()
+            set_global_config(
+                new_config,
+                path=state.get("path"),
+                dirty=True,
+            )
+            st.success("Impostazioni aggiornate. Ricordati di salvare su file.")
 
 
 def _general_section(config: GlobalConfig) -> Tuple[Dict[str, Any], List[str]]:
@@ -152,16 +129,6 @@ def _general_section(config: GlobalConfig) -> Tuple[Dict[str, Any], List[str]]:
     )
     process_pool = st.number_input(
         "Process pool size (0 = auto)", value=config.process_pool_size or 0, min_value=0, step=1
-    )
-    registries_text = st.text_area(
-        "Container registries (uno per riga)",
-        value="\n".join(config.container_registries),
-        height=80,
-    )
-    dependencies_text = st.text_area(
-        "Dipendenze Python extra (uno per riga)",
-        value="\n".join(config.dependencies),
-        height=80,
     )
     env_text = st.text_area(
         "Variabili d'ambiente (JSON)",
@@ -182,59 +149,10 @@ def _general_section(config: GlobalConfig) -> Tuple[Dict[str, Any], List[str]]:
         errors.append(state_error)
 
     mapping: Dict[str, Any] = {
-        "container_registries": _split_lines(registries_text),
-        "dependencies": _split_lines(dependencies_text),
         "env": env,
         "shared_state": shared_state,
-    }
-    if max_concurrency > 0:
-        mapping["max_concurrency"] = max_concurrency
-    if process_pool > 0:
-        mapping["process_pool_size"] = process_pool
-    return mapping, errors
-
-
-def _locations_section(
-    locations,
-    *,
-    table_key: str,
-    empty_label: str,
-) -> Tuple[Dict[str, Any], List[str]]:
-    errors: List[str] = []
-    rows = repository_locations_to_rows(locations)
-    st.caption("Modifica o aggiungi righe per aggiornare le location.")
-    edited = st.data_editor(
-        rows,
-        num_rows="dynamic",
-        hide_index=True,
-        use_container_width=True,
-        key=table_key,
-    )
-    normalized = _normalize_editor_rows(edited)
-    if not normalized:
-        st.info(empty_label)
-        return {}, errors
-
-    git_rows = [row for row in normalized if str(row.get("kind", "")).lower() == "git"]
-    if git_rows:
-        st.markdown("**Test connessione Git**")
-        for row in git_rows:
-            cols = st.columns([3, 1])
-            cols[0].markdown(f"`{row['name']}` → {row['location']}")
-            if cols[1].button("Test", key=f"git-test-{table_key}-{row['name']}"):
-                ok, message = test_git_connection(row["location"], row.get("reference"))
-                if ok:
-                    st.success(message)
-                else:
-                    st.error(message)
-    try:
-        parsed = rows_to_repository_locations(normalized)
-    except ValueError as exc:
-        errors.append(str(exc))
-        parsed = locations
-    mapping = {
-        name: repository_location_to_dict(location)
-        for name, location in parsed.items()
+        "max_concurrency": max_concurrency or None,
+        "process_pool_size": process_pool or None,
     }
     return mapping, errors
 
@@ -332,38 +250,6 @@ def _write_config_to_path(path: str, config: GlobalConfig) -> None:
     else:
         raise ValueError(f"Formato non supportato: {suffix}")
     set_global_config(config, path=str(output_path), dirty=False)
-
-
-def _split_lines(value: str) -> List[str]:
-    return [line.strip() for line in value.splitlines() if line.strip()]
-
-
-def _parse_json_dict(value: str, field: str) -> Dict[str, Any]:
-    text = value.strip()
-    if not text:
-        return {}
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Campo {field} non è un JSON valido: {exc}")
-    if not isinstance(data, dict):
-        raise ValueError(f"Campo {field} deve essere un oggetto JSON.")
-    return data
-
-
-def _safe_json_dict(value: str, field: str, fallback: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
-    try:
-        parsed = _parse_json_dict(value, field)
-    except ValueError as exc:
-        return dict(fallback), str(exc)
-    return parsed, None
-
-
-def _normalize_editor_rows(data) -> List[Dict[str, Any]]:
-    if hasattr(data, "to_dict"):
-        df = data.fillna("")
-        return [dict(row) for row in df.to_dict("records")]
-    return [dict(row) for row in (data or [])]
 
 
 __all__ = ["render"]

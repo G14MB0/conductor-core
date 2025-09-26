@@ -1,4 +1,4 @@
-﻿"""Runtime utilities for hosting FlowOrchestrator in the Streamlit dashboard."""
+"""Runtime utilities for hosting FlowOrchestrator in the Streamlit dashboard."""
 from __future__ import annotations
 
 import asyncio
@@ -159,7 +159,9 @@ class OrchestratorRuntime:
         execution = self._run_coroutine(
             self._run_flow_once(name, payload, metadata, schedule_id)
         )
-        return self._summarise_execution(execution)
+        summary = self._summarise_execution(execution, default_status="completed")
+        self._record_summary(summary)
+        return summary
 
     def schedule_flow(
         self,
@@ -449,19 +451,20 @@ class OrchestratorRuntime:
         return snapshots
 
     def _drain_completed(self) -> None:
-        updated = False
         while not self._completed.empty():
             run_id, summary = self._completed.get()
             self._active_runs.pop(run_id, None)
-            self._history.insert(0, summary)
-            if len(self._history) > self._max_history:
-                self._history = self._history[: self._max_history]
-            updated = True
-        if updated:
-            self._history.sort(key=lambda item: item.started_at, reverse=True)
+            self._record_summary(summary)
+
+    def _record_summary(self, summary: RunSummary) -> None:
+        self._history.insert(0, summary)
+        self._history.sort(key=lambda item: item.started_at, reverse=True)
+        if len(self._history) > self._max_history:
+            self._history = self._history[: self._max_history]
 
     @staticmethod
     def _normalize_deployment(
+
         flow: FlowConfig | FlowDeployment | str,
         *,
         global_config: Optional[GlobalConfig | str],

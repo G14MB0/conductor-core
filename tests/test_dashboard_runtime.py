@@ -21,11 +21,20 @@ import pytest
 if "streamlit" not in sys.modules:
     fake_streamlit = ModuleType("streamlit")
     fake_streamlit.session_state = {}
+
+    def _noop(*_args, **_kwargs):
+        return None
+
+    fake_streamlit.warning = _noop
+    fake_streamlit.error = _noop
+    fake_streamlit.info = _noop
+    fake_streamlit.rerun = _noop
     sys.modules["streamlit"] = fake_streamlit
 
-from conductor.config import FlowConfig, FlowDeployment, GlobalConfig, load_flow_config
+from conductor.config import FlowConfig, FlowDeployment, FlowRuntimeConfig, GlobalConfig, load_flow_config
 
 from dashboard import state
+from dashboard.services import deployments
 from dashboard.services.runtime import OrchestratorRuntime, RunSummary
 
 
@@ -129,7 +138,10 @@ def test_register_and_run_flow(runtime: OrchestratorRuntime, flow_config_path: s
     assert summary.metadata.get("last_node") == "finish"
     runs = runtime.runs()
     assert runs["active"] == []
-    assert runs["history"] == []
+    history = runs["history"]
+    assert len(history) == 1
+    assert history[0].id == summary.id
+    assert history[0].flow_name == name
 
 
 def test_register_flow_from_deployment(runtime: OrchestratorRuntime, flow_config_path: str) -> None:
@@ -216,9 +228,75 @@ def test_get_deployment_returns_copy(runtime: OrchestratorRuntime, flow_config_p
     deployment.metadata["mutation"] = "value"
     fresh = runtime.get_deployment("sample-flow")
     assert "mutation" not in fresh.metadata
+def test_save_and_restore_deployment_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_root = tmp_path / "storage"
+    monkeypatch.setattr(deployments, "_STORAGE_ROOT", storage_root)
+    monkeypatch.setattr(deployments, "_LOCAL_ROOT", storage_root / "local")
+    monkeypatch.setattr(deployments, "_GIT_ROOT", storage_root / "git")
+    monkeypatch.setattr(deployments, "_DEPLOYMENTS_DIR", storage_root / "deployments")
+
+    flow_cfg = FlowConfig.from_mapping(
+        {
+            "name": "restored",
+            "start": ["start"],
+            "nodes": [
+                {
+                    "id": "start",
+                    "callable": f"{MODULE_PATH}:start_node",
+                }
+            ],
+        }
+    )
+    global_cfg = GlobalConfig.from_mapping({"env": {"MODE": "test"}})
+    runtime_cfg = FlowRuntimeConfig.from_mapping(
+        {
+            "flow_definition": "flows/restored.json",
+            "resource_locations": {
+                "flows": {"type": "git", "location": "https://example.com/repo.git"},
+            },
+            "code_locations": {
+                "library": {"type": "filesystem", "location": "/opt/nodes"},
+            },
+            "container_registries": {
+                "dockerhub": {"url": "https://registry-1.docker.io", "token": "abc123"},
+            },
+            "secrets": {
+                "docker-token": {"type": "docker", "value": "abc123"},
+            },
+            "callables": ["library"],
+        }
+    )
+    deployment = FlowDeployment.from_components(
+        flow_cfg,
+        global_config=global_cfg,
+        runtime_config=runtime_cfg,
+        name="restored",
+        metadata={"origin": "unit"},
+    )
+
+    path_file = deployments.save_deployment(deployment)
+    assert path_file.exists()
+
+    restored = deployments.load_saved_deployments()
+    assert "restored" in restored
+    loaded = restored["restored"]
+    assert loaded.global_config.env["MODE"] == "test"
+    assert loaded.runtime_config.flow_definition == "flows/restored.json"
+    assert "flows" in loaded.runtime_config.resource_locations
+    assert loaded.runtime_config.container_registries["dockerhub"].token == "abc123"
+    assert loaded.runtime_config.secrets["docker-token"].value == "abc123"
+    assert loaded.runtime_config.callables == ["library"]
+    assert loaded.metadata["origin"] == "unit"
+
+    deployments.remove_saved_deployment("restored")
+    assert not path_file.exists()
+
 def test_session_state_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_streamlit = ModuleType("streamlit_stub")
     fake_streamlit.session_state = {}
+    fake_streamlit.warning = lambda *_args, **_kwargs: None
+    fake_streamlit.error = lambda *_args, **_kwargs: None
+    fake_streamlit.info = lambda *_args, **_kwargs: None
     monkeypatch.setattr(state, "st", fake_streamlit, raising=False)
 
     created_instances = []
@@ -226,17 +304,48 @@ def test_session_state_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     class DummyRuntime:
         def __init__(self):
             self.shutdown_called = False
+            self.registered = []
             created_instances.append(self)
+
+        def register_flow(self, deployment, *, replace: bool = False):
+            self.registered.append((deployment, replace))
+            return deployment.resolved_name()
 
         def shutdown(self) -> None:
             self.shutdown_called = True
 
     monkeypatch.setattr(state, "OrchestratorRuntime", DummyRuntime)
 
+    restored_deployment = FlowDeployment.from_components(
+        FlowConfig.from_mapping(
+            {
+                "name": "restored-flow",
+                "start": ["start"],
+                "nodes": [
+                    {
+                        "id": "start",
+                        "callable": f"{MODULE_PATH}:start_node",
+                    }
+                ],
+            }
+        ),
+        name="restored-flow",
+    )
+
+    restore_calls = []
+
+    def fake_load_saved_deployments():
+        restore_calls.append(True)
+        return {"restored-flow": restored_deployment}
+
+    monkeypatch.setattr(state, "load_saved_deployments", fake_load_saved_deployments)
+
     runtime_first = state.get_runtime()
     runtime_second = state.get_runtime()
     assert runtime_first is runtime_second
     assert len(created_instances) == 1
+    assert runtime_first.registered == [(restored_deployment, True)]
+    assert len(restore_calls) == 1
 
     cfg = GlobalConfig.from_mapping({"env": {"FOO": "bar"}})
     state.set_global_config(cfg, path="/tmp/config.json", dirty=False)
@@ -253,5 +362,9 @@ def test_session_state_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     state.reset_state()
     assert runtime_first.shutdown_called is True
     assert state.get_global_config_state()["dirty"] is False
-    assert state.get_runtime() is not runtime_first
+
+    runtime_third = state.get_runtime()
+    assert runtime_third is not runtime_first
     assert len(created_instances) == 2
+    assert runtime_third.registered == [(restored_deployment, True)]
+    assert len(restore_calls) == 2

@@ -1,9 +1,11 @@
-﻿"""Flow deployment management page."""
+"""Flow deployment management page."""
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
+import json
 import streamlit as st
+
 
 from conductor.config import FlowDeployment, GlobalConfig
 
@@ -15,6 +17,22 @@ from dashboard.services.runtime import OrchestratorRuntime
 
 _LOCAL_STATE_KEY = "deployment_local_state"
 _GIT_STATE_KEY = "deployment_git_state"
+
+
+def _parse_runtime_payload(raw: str, *, context: str) -> Optional[Dict[str, Any]]:
+    """Parse a runtime JSON string, showing UI errors when invalid."""
+
+    if not raw.strip():
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        st.error(f"{context}: JSON non valido ({exc})")
+        return None
+    if not isinstance(payload, dict):
+        st.error(f"{context}: la configurazione deve essere un oggetto JSON.")
+        return None
+    return payload
 
 
 def render(runtime: OrchestratorRuntime) -> None:
@@ -67,14 +85,22 @@ def _render_local_panel(runtime: OrchestratorRuntime, base_config: GlobalConfig)
             value=state_bucket.get("flow_name", ""),
         )
         replace = st.checkbox(
-            "Sostituisci se il flow esiste gi�",
+            "Sostituisci se il flow esiste gia",
             value=state_bucket.get("replace", False),
             key="local-replace",
+        )
+        runtime_text = st.text_area(
+            "Configurazione runtime (JSON opzionale)",
+            value=state_bucket.get("runtime", ""),
+            key="local-runtime-config",
+            height=160,
+            help="Fornisci un oggetto JSON con chiavi come resource_locations, container_registries e secrets.",
         )
         submitted = st.form_submit_button("Registra flow locale", type="primary")
 
     state_bucket["flow_name"] = flow_name
     state_bucket["replace"] = replace
+    state_bucket["runtime"] = runtime_text
 
     if not submitted:
         return
@@ -87,6 +113,12 @@ def _render_local_panel(runtime: OrchestratorRuntime, base_config: GlobalConfig)
     global_bytes = global_file.getvalue() if global_file is not None else None
     code_bytes = code_file.getvalue() if code_file is not None else None
 
+    runtime_payload = _parse_runtime_payload(
+        runtime_text, context="Configurazione runtime locale"
+    )
+    if runtime_payload is None and runtime_text.strip():
+        return
+
     try:
         result = deployments.prepare_local_deployment(
             flow_payload=flow_bytes,
@@ -97,8 +129,10 @@ def _render_local_panel(runtime: OrchestratorRuntime, base_config: GlobalConfig)
             global_filename=global_file.name if global_file is not None else None,
             code_archive=code_bytes,
             code_filename=code_file.name if code_file is not None else None,
+            runtime_payload=runtime_payload,
         )
         registered = runtime.register_flow(result.deployment, replace=replace)
+        deployments.save_deployment(result.deployment)
     except Exception as exc:  # pragma: no cover - UI feedback
         st.error(f"Registrazione fallita: {exc}")
         return
@@ -115,7 +149,7 @@ def _render_git_panel(runtime: OrchestratorRuntime, base_config: GlobalConfig) -
     st.subheader("Configurazione da repository Git")
     st.write(
         "Collega un repository per selezionare i file di configurazione e le cartelle di codice"
-        " direttamente dalla sorgente controllata. � possibile utilizzare branch, tag o commit."
+        " direttamente dalla sorgente controllata. E' possibile utilizzare branch, tag o commit."
     )
 
     git_state: Dict[str, object] = st.session_state.setdefault(_GIT_STATE_KEY, {})
@@ -154,9 +188,9 @@ def _render_git_panel(runtime: OrchestratorRuntime, base_config: GlobalConfig) -
         return
 
     st.markdown(
-        f"**Repo:** `{snapshot.repo_url}`  �  **Commit:** `{snapshot.commit}`"
+        f"**Repo:** `{snapshot.repo_url}`  -  **Commit:** `{snapshot.commit}`"
         + (
-            f"  �  **Riferimento richiesto:** `{snapshot.requested_reference}`"
+            f"  -  **Riferimento richiesto:** `{snapshot.requested_reference}`"
             if snapshot.requested_reference
             else ""
         )
@@ -185,7 +219,7 @@ def _render_git_panel(runtime: OrchestratorRuntime, base_config: GlobalConfig) -
         snapshot.directories,
         default=[],
         key="git-code-paths",
-        help="Puoi selezionare pi� cartelle; saranno registrate come code locations nel deployment.",
+        help="Puoi selezionare piu cartelle; saranno registrate come code locations nel deployment.",
     )
 
     flow_name = st.text_input(
@@ -194,9 +228,16 @@ def _render_git_panel(runtime: OrchestratorRuntime, base_config: GlobalConfig) -
         key="git-flow-name",
     )
     replace = st.checkbox(
-        "Sostituisci se il flow esiste gi�",
+        "Sostituisci se il flow esiste gia",
         value=git_state.get("replace", False),
         key="git-replace",
+    )
+    runtime_text = st.text_area(
+        "Configurazione runtime (JSON opzionale)",
+        value=str(git_state.get("runtime", "")),
+        key="git-runtime-config",
+        height=160,
+        help="Fornisci un oggetto JSON con chiavi come container_registries, secrets, resource_locations, callables.",
     )
 
     col_actions = st.columns(2)
@@ -207,8 +248,15 @@ def _render_git_panel(runtime: OrchestratorRuntime, base_config: GlobalConfig) -
 
     git_state["flow_name"] = flow_name
     git_state["replace"] = replace
+    git_state["runtime"] = runtime_text
 
     if not register:
+        return
+
+    runtime_payload = _parse_runtime_payload(
+        runtime_text, context="Configurazione runtime da Git"
+    )
+    if runtime_payload is None and runtime_text.strip():
         return
 
     try:
@@ -219,8 +267,10 @@ def _render_git_panel(runtime: OrchestratorRuntime, base_config: GlobalConfig) -
             flow_name=flow_name.strip() or None,
             global_config_path=global_path,
             code_paths=code_paths,
+            runtime_payload=runtime_payload,
         )
         registered = runtime.register_flow(result.deployment, replace=replace)
+        deployments.save_deployment(result.deployment)
     except Exception as exc:  # pragma: no cover - UI feedback
         st.error(f"Registrazione fallita: {exc}")
         return
@@ -257,14 +307,23 @@ def _render_registered_flows(runtime: OrchestratorRuntime) -> None:
             if deployment and deployment.metadata:
                 st.caption("Metadati del deployment")
                 _render_metadata(deployment.metadata)
-            code_locations = ", ".join(global_config.code_locations.keys()) or "Nessuna"
-            st.markdown(f"**Code locations:** {code_locations}")
+            if deployment:
+                runtime_cfg = deployment.runtime_config
+                code_locations = ", ".join(runtime_cfg.code_locations.keys()) or "Nessuna"
+                st.markdown(f"**Code locations:** {code_locations}")
+                resource_locations = ", ".join(runtime_cfg.resource_locations.keys()) or "Nessuna"
+                st.markdown(f"**Resource locations:** {resource_locations}")
+                registries = ", ".join(runtime_cfg.container_registries.keys()) or "Nessuno"
+                st.markdown(f"**Container registries:** {registries}")
+                secrets = ", ".join(runtime_cfg.secrets.keys()) or "Nessuno"
+                st.markdown(f"**Secrets:** {secrets}")
             if st.button("Deregistra flow", key=f"remove-{key_suffix}"):
                 try:
                     runtime.unregister_flow(name)
                 except Exception as exc:  # pragma: no cover - UI feedback
                     st.error(f"Impossibile deregistrare il flow: {exc}")
                 else:
+                    deployments.remove_saved_deployment(name)
                     st.success(f"Flow '{name}' rimosso.")
                     st.rerun()
 

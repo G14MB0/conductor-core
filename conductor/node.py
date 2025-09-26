@@ -10,7 +10,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol
 
-from .config import GlobalConfig, NodeDefinition
+from .config import FlowRuntimeConfig, GlobalConfig, NodeDefinition
 from .logging_utils import get_node_logger
 from . import utils
 
@@ -117,14 +117,15 @@ class ProcessPythonExecutor:
 
 
 class DockerExecutor:
-    def __init__(self, definition: NodeDefinition, global_config: GlobalConfig):
+    def __init__(self, definition: NodeDefinition, global_config: GlobalConfig, runtime_config: FlowRuntimeConfig):
         self._definition = definition
         self._global_config = global_config
+        self._runtime_config = runtime_config
 
     async def run(self, node_input: NodeInput, env: Dict[str, str]) -> NodeOutput:
         if not self._definition.image:
             raise ValueError(f"Node '{self._definition.id}' requires a container image.")
-        image = self._global_config.resolve_image(self._definition.image)
+        image = self._runtime_config.resolve_image(self._definition.image)
         command: List[str] = ["docker", "run", "--rm"]
         for key, value in env.items():
             command.extend(["-e", f"{key}={value}"])
@@ -171,10 +172,12 @@ class ExecutableNode:
         self,
         definition: NodeDefinition,
         global_config: GlobalConfig,
+        runtime_config: FlowRuntimeConfig,
         process_pool: Optional[ProcessPoolExecutor] = None,
     ) -> None:
         self.definition = definition
         self.global_config = global_config
+        self.runtime_config = runtime_config
         self.process_pool = process_pool
         self.logger = get_node_logger(definition.id)
         self._executor = self._build_executor()
@@ -191,7 +194,7 @@ class ExecutableNode:
                 raise RuntimeError("Process executor requested without an available process pool.")
             return ProcessPythonExecutor(self.definition.callable, self.process_pool)
         if self.definition.executor == "docker":
-            return DockerExecutor(self.definition, self.global_config)
+            return DockerExecutor(self.definition, self.global_config, self.runtime_config)
         raise ValueError(f"Unknown executor type '{self.definition.executor}' for node '{self.definition.id}'.")
 
     async def execute(self, value: Any = None, predecessor: Optional[str] = None) -> NodeOutput:

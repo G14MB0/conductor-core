@@ -10,7 +10,13 @@ import sys
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from .config import GlobalConfig, load_flow_config, load_global_config
+from .config import (
+    FlowRuntimeConfig,
+    GlobalConfig,
+    load_flow_config,
+    load_flow_runtime_config,
+    load_global_config,
+)
 from .diagram import render_mermaid_diagram, summarise_trace
 from .execution import ExecutionTrace, FlowExecutor
 from .resources import ResourceResolver
@@ -65,8 +71,13 @@ def _inject_code_paths(paths: Sequence[Path]) -> None:
 
 async def _run_flow(args: argparse.Namespace) -> None:
     global_config = load_global_config(args.global_config) if args.global_config else GlobalConfig.from_mapping({})
+    runtime_config = (
+        load_flow_runtime_config(args.runtime_config)
+        if getattr(args, "runtime_config", None)
+        else FlowRuntimeConfig()
+    )
 
-    with ResourceResolver(global_config) as resources:
+    with ResourceResolver(global_config, runtime_config) as resources:
         code_paths = list(resources.code_paths().values())
         with _inject_code_paths(code_paths):
             flow_path = resources.resolve_file(args.flow)
@@ -77,7 +88,7 @@ async def _run_flow(args: argparse.Namespace) -> None:
 
             payload = _load_payload(args.payload, args.payload_file, resources)
 
-            async with FlowExecutor(flow_config, global_config, logger=logger) as executor:
+            async with FlowExecutor(flow_config, global_config, runtime_config, logger=logger) as executor:
                 results = await executor.run(initial_payload=payload)
                 if args.print_results:
                     print(json.dumps([result.to_dict() for result in results], indent=2))
@@ -93,13 +104,15 @@ async def _run_flow(args: argparse.Namespace) -> None:
                     print(json.dumps(trace, indent=2))
 
 
-
-
-
 def _render_diagram(args: argparse.Namespace) -> None:
     global_config = load_global_config(args.global_config) if args.global_config else GlobalConfig.from_mapping({})
+    runtime_config = (
+        load_flow_runtime_config(args.runtime_config)
+        if getattr(args, "runtime_config", None)
+        else FlowRuntimeConfig()
+    )
 
-    with ResourceResolver(global_config) as resources:
+    with ResourceResolver(global_config, runtime_config) as resources:
         code_paths = list(resources.code_paths().values())
         with _inject_code_paths(code_paths):
             flow_path = resources.resolve_file(args.flow)
@@ -126,9 +139,6 @@ def _render_diagram(args: argparse.Namespace) -> None:
                 print(json.dumps(summary, indent=2))
 
 
-
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Execute conductor flows defined in configuration files.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -136,6 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", help="Execute a flow")
     run_parser.add_argument("--flow", required=True, help="Path to the flow configuration file (JSON/YAML/TOML).")
     run_parser.add_argument("--global-config", help="Path to the global configuration file (JSON/YAML/TOML).")
+    run_parser.add_argument("--runtime-config", help="Path to the flow runtime configuration file (JSON/YAML/TOML).")
     run_parser.add_argument("--payload", help="Inline JSON string to pass as the initial payload for the flow.")
     run_parser.add_argument("--payload-file", help="Path to a JSON file to use as the initial payload.")
     run_parser.add_argument("--log-level", default="INFO", help="Logging level (default: INFO).")
@@ -171,6 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     diagram_parser = subparsers.add_parser("diagram", help="Render a diagram for the flow definition")
     diagram_parser.add_argument("--flow", required=True, help="Path to the flow configuration file (JSON/YAML/TOML).")
     diagram_parser.add_argument("--global-config", help="Path to the global configuration file (JSON/YAML/TOML).")
+    diagram_parser.add_argument("--runtime-config", help="Path to the flow runtime configuration file (JSON/YAML/TOML).")
     diagram_parser.add_argument("--trace-file", help="Path to an execution trace JSON file to highlight the executed path.")
     diagram_parser.add_argument(
         "--format",

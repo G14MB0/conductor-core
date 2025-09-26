@@ -8,6 +8,7 @@ import streamlit as st
 
 from conductor.config import GlobalConfig, load_global_config
 
+from dashboard.services.deployments import load_saved_deployments
 from dashboard.services.runtime import OrchestratorRuntime
 
 
@@ -17,8 +18,22 @@ _GLOBAL_CONFIG_KEY = "dashboard_global_config"
 
 def get_runtime() -> OrchestratorRuntime:
     if _RUNTIME_KEY not in st.session_state:
-        st.session_state[_RUNTIME_KEY] = OrchestratorRuntime()
-    return st.session_state[_RUNTIME_KEY]
+        runtime = OrchestratorRuntime()
+        failures = []
+        for name, deployment in load_saved_deployments().items():
+            try:
+                runtime.register_flow(deployment, replace=True)
+            except Exception as exc:  # pragma: no cover - restoration feedback
+                failures.append((name, str(exc)))
+        st.session_state[_RUNTIME_KEY] = runtime
+        if failures:
+            st.session_state["_runtime_restore_failures"] = failures
+    runtime = st.session_state[_RUNTIME_KEY]
+    failures = st.session_state.pop("_runtime_restore_failures", None)
+    if failures:
+        for name, message in failures:
+            st.warning(f"Impossibile ripristinare il flow '{name}': {message}")
+    return runtime
 
 
 def get_global_config_state() -> Dict[str, Any]:

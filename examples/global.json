@@ -10,9 +10,7 @@
     "method": "POST",
     "enabled": false
   },
-  "container_registries": [
-    "docker.io"
-  ],
   "process_pool_size": 2,
   "max_concurrency": 4
 }
+

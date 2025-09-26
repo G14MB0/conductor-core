@@ -1,0 +1,40 @@
+{
+    "resource_locations": {
+        "flows": {
+            "type": "git",
+            "location": "https://github.com/acme/conductor-assets.git",
+            "reference": "main",
+            "subpath": "flows",
+            "token_secret": "git-token"
+        }
+    },
+    "code_locations": {
+        "nodes": {
+            "type": "git",
+            "location": "https://github.com/acme/conductor-nodes.git",
+            "reference": "main",
+            "subpath": "src",
+            "token_secret": "git-token"
+        }
+    },
+    "container_registries": {
+        "dockerhub": {
+            "url": "https://registry-1.docker.io",
+            "token_secret": "dockerhub-token"
+        }
+    },
+    "secrets": {
+        "git-token": {
+            "type": "git",
+            "env": "GITHUB_TOKEN"
+        },
+        "dockerhub-token": {
+            "type": "docker",
+            "value": "<personal-access-token>"
+        }
+    },
+    "flow_definition": "flows/order-routing.json",
+    "callables": [
+        "nodes/order_routing.py"
+    ]
+}

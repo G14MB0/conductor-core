@@ -239,12 +239,14 @@ them concurrently.
     "method": "POST",
     "enabled": false
   },
-  "dependencies": ["requests==2.31.0"],
-  "container_registries": ["registry.example.com/library"],
   "process_pool_size": 2,
   "max_concurrency": 4
 }
 ```
+
+The global file only contains server-level defaults and shared state. When the
+orchestrator loads a deployment, these values are merged with the flow runtime
+configuration described below.
 
 `shared_state` values are preloaded into the global state object that can be
 accessed from node implementations via:
@@ -257,64 +259,98 @@ current_value = state.get_sync("key", 0)
 state.set_sync("key", current_value + 1)
 ```
 
-## Command line usage
+### Flow runtime configuration
 
-Install dependencies (standard library only) and run the CLI:
-
-```bash
-python -m conductor.cli run \
-  --flow examples/flow.json \
-  --global-config examples/global.json \
-  --payload '{"number": 6}' \
-  --print-state \
-  --print-trace
-```
-
-To skip result output, add `--no-print-results`. To store the trace for later
-visualisation, use `--trace-file path/to/output.json`.
-
-### Remote resources
-
-Keep flows, payload seeds, and Python nodes in persistent repositories and let the CLI fetch them on demand. Declare repositories once in your global configuration and reference them by alias when invoking `run` or `diagram`.
-
-Add `resource_locations` for artefacts such as flow definitions or input payloads, and `code_locations` for Python packages that expose node callables. Each entry supports `type` (`filesystem`, `git`, or `http` for resources), a `url`/`path`, and optional `reference`/`subpath` hints.
+Each flow carries its own runtime configuration describing where assets live,
+which registries expose container images, and any secrets needed to authenticate
+against those systems. A minimal example:
 
 ```jsonc
 {
   "resource_locations": {
     "flows": {
       "type": "git",
-      "url": "https://github.com/acme/conductor-assets.git",
+      "location": "https://github.com/acme/conductor-assets.git",
       "reference": "main",
-      "subpath": "flows"
-    },
-    "payloads": {
-      "type": "http",
-      "url": "https://assets.example.com/conductor/payloads"
+      "subpath": "flows",
+      "token_secret": "git-token"
     }
   },
   "code_locations": {
     "nodes": {
       "type": "git",
-      "url": "https://github.com/acme/conductor-nodes.git",
+      "location": "https://github.com/acme/conductor-nodes.git",
       "reference": "main",
-      "subpath": "src"
+      "subpath": "src",
+      "token_secret": "git-token"
     }
-  }
+  },
+  "container_registries": {
+    "dockerhub": {
+      "url": "https://registry-1.docker.io",
+      "token_secret": "dockerhub-token"
+    }
+  },
+  "secrets": {
+    "git-token": {"type": "git", "env": "GITHUB_TOKEN"},
+    "dockerhub-token": {"type": "docker", "value": "<personal-access-token>"}
+  },
+  "flow_definition": "flows/order-routing.json",
+  "callables": [
+    "nodes/order_routing.py"
+  ]
 }
 ```
 
-With the configuration above you can execute a flow and pull inputs straight from the registered repositories:
+Secrets can resolve to literal values (`value`), environment variables (`env`) or
+files (`file`). `RepositoryLocation` entries reference secrets through the
+`token_secret` or `password_secret` attributes and the orchestrator resolves them
+at runtime.
+
+### Command line usage
+
+Install dependencies (standard library only) and run the CLI:
+
+```bash
+python -m conductor.cli run \
+  --flow flows://order-routing.json \
+  --runtime-config deploy/config/flows/order-routing.runtime.json \
+  --global-config deploy/config/global.json \
+  --payload '{"number": 6}' \
+  --print-state \
+  --print-trace
+```
+
+`--runtime-config` is optional when every artefact lives locally, but supplying
+it unlocks remote repositories, container registries, and secrets.
+
+To skip result output, add `--no-print-results`. To store the trace for later
+visualisation, use `--trace-file path/to/output.json`.
+
+### Remote resources
+
+Runtime configurations describe where flow definitions, payload seeds, and
+Python modules reside. The excerpt above exposes two aliases:
+
+- `flows://` resolves flow definitions from a git repository.
+- `nodes://` adds the repository to `sys.path` so imports such as
+  `nodes.order_routing.enrich` work without packaging.
+
+With that configuration you can execute a flow and pull inputs straight from the
+registered repositories:
 
 ```bash
 python -m conductor.cli run \
   --global-config config/global.json \
+  --runtime-config config/flows/order-routing.runtime.json \
   --flow flows://order-routing.json \
-  --payload-file payloads://order-42.json
+  --payload-file payloads://orders/order-42.json
 ```
 
-The CLI automatically clones git repositories into `~/.conductor/sources/<name>` (override with `resource_cache_dir` in the global config) and adds any configured `code_locations` to `sys.path` for the duration of the command. Resource aliases work the same way for `diagram`, and direct URLs such as `https://...` remain valid when you do not need an alias. Define optional `dependencies` alongside these sections to have the container entrypoint run `pip install` before executing your flow.
-
+The CLI caches git repositories in `~/.conductor/sources/<name>` (override with
+`resource_cache_dir` inside the runtime configuration) and honours secrets when
+fetching or executing Docker nodes. Direct URLs such as `https://...` remain
+valid when you do not need an alias.
 
 ## Docker Compose deployment
 
@@ -332,12 +368,12 @@ services:
     volumes:
       - ./config:/etc/conductor:ro
       - conductor-cache:/root/.conductor
-    command: ["run", "--flow", "flows://order-routing.json"]
+    command: ["run", "--flow", "flows://order-routing.json", "--runtime-config", "/etc/conductor/flows/order-routing.runtime.json"]
 volumes:
   conductor-cache: {}
 ```
 
-The mounted `global.json` can point at remote repositories and include a `dependencies` list, ensuring any inline or process-based nodes have the Python packages they require. When configuration is easier to manage as environment variables, set `CONDUCTOR_GLOBAL_CONFIG_JSON` to a JSON document instead of mounting a file. A ready-to-edit template lives in `deploy/docker-compose.yaml`.
+The mounted `global.json` provides the shared server defaults. Place each flow's runtime configuration under `/etc/conductor/flows` (mounted read-only from the host) and reference it via `--runtime-config`. When configuration is easier to manage as environment variables, set `CONDUCTOR_GLOBAL_CONFIG_JSON` to a JSON document instead of mounting a file. A ready-to-edit template lives in `deploy/docker-compose.yaml`.
 
 ## Example functions and nodes
 

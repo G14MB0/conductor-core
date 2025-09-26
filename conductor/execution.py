@@ -9,7 +9,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-from .config import FlowConfig, GlobalConfig
+from .config import FlowConfig, FlowRuntimeConfig, GlobalConfig
 from .global_state import child_initializer, get_global_state, get_shared_proxy, set_initial_state
 from .logging_utils import get_node_logger
 from .node import ExecutableNode, NodeInput, NodeOutput
@@ -111,9 +111,16 @@ class FlowResult:
 class FlowExecutor:
     """Coordinate the execution of nodes according to the flow definition."""
 
-    def __init__(self, flow: FlowConfig, global_config: Optional[GlobalConfig] = None, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        flow: FlowConfig,
+        global_config: Optional[GlobalConfig] = None,
+        runtime_config: Optional[FlowRuntimeConfig] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
         self.flow = flow
         self.global_config = global_config or GlobalConfig.from_mapping({})
+        self.runtime_config = runtime_config or FlowRuntimeConfig()
         self.logger = logger or logging.getLogger("conductor.flow")
         self._process_pool: Optional[ProcessPoolExecutor] = None
         self._requires_pool = any(node.executor == "process" for node in self.flow.nodes.values())
@@ -136,7 +143,12 @@ class FlowExecutor:
             )
 
         for node_id, node in self.flow.nodes.items():
-            self._nodes[node_id] = ExecutableNode(node, self.global_config, self._process_pool)
+            self._nodes[node_id] = ExecutableNode(
+                node,
+                self.global_config,
+                self.runtime_config,
+                self._process_pool,
+            )
 
         self._concurrency = self.global_config.max_concurrency or len(self._nodes) or 1
         self.logger.debug(
