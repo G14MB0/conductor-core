@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -47,6 +48,7 @@ def start_node(node_input):
     """Increment the incoming payload and forward it."""
 
     value = node_input.data or 0
+    logging.getLogger("conductor.node.tests.start").info("start_node incrementing value=%s", value)
     return {"status": "success", "data": value + 1}
 
 
@@ -76,8 +78,12 @@ def test_global_config_dependencies_parsing() -> None:
 
 
 @pytest.fixture
-def runtime() -> Generator[OrchestratorRuntime, None, None]:
-    instance = OrchestratorRuntime()
+def runtime_storage(tmp_path: Path) -> Path:
+    return tmp_path / "runtime-storage"
+
+@pytest.fixture
+def runtime(runtime_storage: Path) -> Generator[OrchestratorRuntime, None, None]:
+    instance = OrchestratorRuntime(storage_dir=runtime_storage)
     try:
         yield instance
     finally:
@@ -125,6 +131,7 @@ def _wait_for_history(runtime: OrchestratorRuntime, run_id: str, *, timeout: flo
     raise AssertionError(f"Run {run_id} did not appear in history within {timeout} seconds")
 
 
+
 def test_register_and_run_flow(runtime: OrchestratorRuntime, flow_config_path: str, global_config_path: str) -> None:
     name = runtime.register_flow(flow_config_path, global_config=global_config_path)
 
@@ -155,6 +162,32 @@ def test_register_and_run_flow(runtime: OrchestratorRuntime, flow_config_path: s
     assert len(history) == 1
     assert history[0].id == summary.id
     assert history[0].flow_name == name
+
+def test_logs_are_captured(runtime: OrchestratorRuntime, flow_config_path: str, global_config_path: str) -> None:
+    runtime.clear_logs()
+    name = runtime.register_flow(flow_config_path, global_config=global_config_path)
+    runtime.run_flow(name)
+    entries = runtime.logs()
+    assert any('start_node incrementing value=' in entry.message for entry in entries)
+
+
+def test_run_history_persisted(runtime_storage: Path, flow_config_path: str, global_config_path: str) -> None:
+    first_runtime = OrchestratorRuntime(storage_dir=runtime_storage)
+    try:
+        name = first_runtime.register_flow(flow_config_path, global_config=global_config_path)
+        summary = first_runtime.run_flow(name)
+        history_first = first_runtime.runs()['history']
+        assert any(entry.id == summary.id for entry in history_first)
+    finally:
+        first_runtime.shutdown()
+
+    second_runtime = OrchestratorRuntime(storage_dir=runtime_storage)
+    try:
+        history_second = second_runtime.runs()['history']
+    finally:
+        second_runtime.shutdown()
+    assert any(entry.id == summary.id for entry in history_second)
+
 
 
 def test_register_flow_from_deployment(runtime: OrchestratorRuntime, flow_config_path: str) -> None:

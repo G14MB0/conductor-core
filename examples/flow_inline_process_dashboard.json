@@ -1,0 +1,39 @@
+{
+  "name": "dashboard-inline-process",
+  "description": "Inline/process example tailored for the dashboard manual run form.",
+  "start": ["inline_prepare"],
+  "nodes": [
+    {
+      "id": "inline_prepare",
+      "name": "Inline Prepare",
+      "executor": "inline",
+      "callable": "examples.dashboard_inline_process:inline_prepare",
+      "timeout": 10.0,
+      "transitions": {
+        "ready": ["process_calculate"]
+      }
+    },
+    {
+      "id": "process_calculate",
+      "name": "Process Calculate",
+      "executor": "process",
+      "callable": "examples.dashboard_inline_process:process_calculate",
+      "timeout": 30.0,
+      "env": {
+        "PROCESS_GREETING": "hello-from-process"
+      },
+      "transitions": {
+        "success": ["inline_report"],
+        "timeout": ["inline_report"],
+        "error": ["inline_report"]
+      }
+    },
+    {
+      "id": "inline_report",
+      "name": "Inline Report",
+      "executor": "inline",
+      "callable": "examples.dashboard_inline_process:inline_report",
+      "transitions": {}
+    }
+  ]
+}

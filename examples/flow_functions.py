@@ -33,7 +33,8 @@ def branching(node_input: NodeInput) -> NodeOutput:
 
 def intensive(node_input: NodeInput) -> NodeOutput:
     """Simple CPU intensive task executed in a separate process."""
-
+    import logging
+    logging.error("Starting intensive task...")
     payload: Dict[str, Any] = dict(node_input.data or {})
     number = int(payload.get("number", 0))
     total = sum(range(number + 1))

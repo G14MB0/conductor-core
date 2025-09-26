@@ -258,7 +258,7 @@ def _parse_dependencies(text: str, fallback: List[str]) -> Tuple[List[str], Opti
         entries = [part.strip() for part in data.replace(",", "\n").splitlines() if part.strip()]
         return entries, None
     return list(fallback), "Il campo 'dependencies' deve essere un array JSON, una stringa o righe separate."
-                st.success(f"Configurazione salvata in {path}")
+                # st.success(f"Configurazione salvata in {path}")
 
 
 def _write_config_to_path(path: str, config: GlobalConfig) -> None:

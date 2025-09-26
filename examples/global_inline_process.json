@@ -1,0 +1,11 @@
+{
+  "max_concurrency": 3,
+  "process_pool_size": 2,
+  "env": {
+    "CONDUCTOR_LOG_LEVEL": "INFO",
+    "DEMO_FLAG": "dashboard-inline-process"
+  },
+  "shared_state": {
+    "demo": "inline-process-dashboard"
+  }
+}

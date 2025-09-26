@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequ
 
 from ..config import FlowConfig, FlowDeployment, GlobalConfig
 from ..execution import ExecutionTrace, FlowExecutor, FlowResult
+from ..logging_utils import configure_logging
 
 UTC = timezone.utc
 
@@ -423,6 +424,7 @@ class FlowOrchestrator:
     ) -> FlowExecution:
         started_at = _utcnow()
         metadata = dict(metadata or {})
+        configure_logging(registration.deployment.global_config)
         async with registration.create_executor() as executor:
             results = await executor.run(initial_payload=payload)
             trace = executor.trace

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import queue
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional
 
 from conductor.config import (
     FlowConfig,
@@ -16,6 +19,7 @@ from conductor.config import (
     load_flow_config,
     load_global_config,
 )
+from conductor.logging_utils import configure_logging
 from conductor.orchestrator import FlowExecution, FlowOrchestrator, ScheduledFlow
 
 
@@ -24,6 +28,16 @@ from dashboard.services.container_logs import (
     collect_container_logs,
 )
 from dashboard.services.logs import LogEntry, install_dashboard_log_handler
+
+LOGGER = logging.getLogger(__name__)
+_DEFAULT_STORAGE_DIR = Path(__file__).resolve().parent.parent / "storage"
+_HISTORY_FILENAME = "run_history.json"
+
+
+def _ensure_directory(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
 
 @dataclass
 class RunSummary:
@@ -56,7 +70,7 @@ class _RunEntry:
 class OrchestratorRuntime:
     """Background runner that exposes FlowOrchestrator operations to Streamlit."""
 
-    def __init__(self, *, max_history: int = 50):
+    def __init__(self, *, max_history: int = 50, storage_dir: Optional[Path] = None):
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -66,13 +80,20 @@ class OrchestratorRuntime:
         self._orchestrator: Optional[FlowOrchestrator] = None
         self._ready = threading.Event()
         self._max_history = max_history
+        base_dir = Path(storage_dir).expanduser() if storage_dir is not None else _DEFAULT_STORAGE_DIR
+        self._storage_dir = _ensure_directory(base_dir)
+        self._history_file = self._storage_dir / _HISTORY_FILENAME
+        self._history_lock = threading.Lock()
         self._active_runs: Dict[str, _RunEntry] = {}
         self._history: List[RunSummary] = []
         self._completed: "queue.Queue[tuple[str, RunSummary]]" = queue.Queue()
         self._log_buffer = install_dashboard_log_handler()
         self._closed = False
+        self._load_persisted_history()
         self._thread.start()
         self._ready.wait()
+
+
 
     # ------------------------------------------------------------------
     # Public API
@@ -222,7 +243,9 @@ class OrchestratorRuntime:
 
         active = self._run_coroutine(self._snapshot_active())
         self._drain_completed()
-        return {"active": active, "history": list(self._history)}
+        with self._history_lock:
+            history_snapshot = list(self._history)
+        return {"active": active, "history": history_snapshot}
 
     def logs(self, *, minimum_level: Optional[str] = None) -> List[LogEntry]:
         """Return captured log entries, optionally filtered by level name."""
@@ -466,10 +489,134 @@ class OrchestratorRuntime:
             self._record_summary(summary)
 
     def _record_summary(self, summary: RunSummary) -> None:
-        self._history.insert(0, summary)
-        self._history.sort(key=lambda item: item.started_at, reverse=True)
-        if len(self._history) > self._max_history:
-            self._history = self._history[: self._max_history]
+        with self._history_lock:
+            self._history.insert(0, summary)
+            self._history.sort(key=lambda item: item.started_at, reverse=True)
+            if len(self._history) > self._max_history:
+                self._history = self._history[: self._max_history]
+            snapshot = list(self._history)
+        self._persist_history(snapshot)
+
+    def _persist_history(self, history: List[RunSummary]) -> None:
+        try:
+            data = [self._summary_to_dict(item) for item in history]
+            _ensure_directory(self._history_file.parent)
+            tmp_path = self._history_file.with_suffix('.tmp')
+            tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+            tmp_path.replace(self._history_file)
+        except Exception as exc:  # pragma: no cover - best effort persistence
+            LOGGER.warning("Failed to persist run history to %s: %s", self._history_file, exc)
+
+
+    def _load_persisted_history(self) -> None:
+        if not self._history_file.exists():
+            return
+        try:
+            raw = json.loads(self._history_file.read_text(encoding='utf-8'))
+        except Exception as exc:  # pragma: no cover - best effort persistence
+            LOGGER.warning("Failed to load run history from %s: %s", self._history_file, exc)
+            return
+        records: List[RunSummary] = []
+        for entry in raw:
+            if isinstance(entry, Mapping):
+                try:
+                    records.append(self._summary_from_dict(entry))
+                except Exception as exc:  # pragma: no cover - defensive parsing
+                    LOGGER.debug("Ignored invalid run history entry: %s", exc)
+        if not records:
+            return
+        records.sort(key=lambda item: item.started_at, reverse=True)
+        with self._history_lock:
+            self._history = records[: self._max_history]
+
+
+    @staticmethod
+    def _summary_to_dict(summary: RunSummary) -> Dict[str, Any]:
+        return {
+            'id': summary.id,
+            'flow_name': summary.flow_name,
+            'status': summary.status,
+            'started_at': OrchestratorRuntime._serialize_datetime(summary.started_at),
+            'finished_at': OrchestratorRuntime._serialize_datetime(summary.finished_at),
+            'duration': summary.duration,
+            'schedule_id': summary.schedule_id,
+            'payload_preview': OrchestratorRuntime._jsonify(summary.payload_preview),
+            'metadata': OrchestratorRuntime._jsonify(summary.metadata),
+            'error': summary.error,
+        }
+
+
+    @staticmethod
+    def _summary_from_dict(data: Mapping[str, Any]) -> RunSummary:
+        started_at = OrchestratorRuntime._parse_datetime(data.get('started_at'))
+        finished_at = OrchestratorRuntime._parse_datetime(data.get('finished_at'))
+        duration_value = data.get('duration')
+        try:
+            duration = float(duration_value) if duration_value is not None else None
+        except (TypeError, ValueError):
+            duration = None
+        metadata_raw = data.get('metadata') or {}
+        metadata = {str(key): value for key, value in metadata_raw.items()} if isinstance(metadata_raw, Mapping) else {}
+        payload = data.get('payload_preview')
+        schedule_id = data.get('schedule_id')
+        if schedule_id is not None:
+            schedule_id = str(schedule_id)
+        error_value = data.get('error')
+        error = str(error_value) if error_value is not None else None
+        return RunSummary(
+            id=str(data.get('id') or uuid.uuid4().hex),
+            flow_name=str(data.get('flow_name') or 'flow'),
+            status=str(data.get('status') or 'unknown'),
+            started_at=started_at or datetime.now(timezone.utc),
+            finished_at=finished_at,
+            duration=duration,
+            schedule_id=schedule_id,
+            payload_preview=payload,
+            metadata=metadata,
+            error=error,
+            result=None,
+        )
+
+
+    @staticmethod
+    def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value)
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        return None
+
+
+    @staticmethod
+    def _jsonify(value: Any) -> Any:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, datetime):
+            return OrchestratorRuntime._serialize_datetime(value)
+        if isinstance(value, Mapping):
+            return {str(key): OrchestratorRuntime._jsonify(val) for key, val in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [OrchestratorRuntime._jsonify(item) for item in value]
+        return repr(value)
 
     @staticmethod
     def _normalize_deployment(

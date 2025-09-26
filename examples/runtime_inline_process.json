@@ -1,0 +1,6 @@
+{
+  "flow_definition": "examples/flow_inline_process_dashboard.json",
+  "callables": [
+    "examples"
+  ]
+}
