@@ -19,6 +19,10 @@ from conductor.config import (
 from conductor.orchestrator import FlowExecution, FlowOrchestrator, ScheduledFlow
 
 
+from dashboard.services.container_logs import (
+    ContainerLogSnapshot,
+    collect_container_logs,
+)
 from dashboard.services.logs import LogEntry, install_dashboard_log_handler
 
 @dataclass
@@ -224,6 +228,11 @@ class OrchestratorRuntime:
         """Return captured log entries, optionally filtered by level name."""
 
         return self._log_buffer.snapshot(level=minimum_level)
+
+    def container_logs(self, *, tail: int = 200) -> List[ContainerLogSnapshot]:
+        """Collect recent log lines from the configured Docker containers."""
+
+        return collect_container_logs(tail=tail)
 
     def clear_logs(self) -> None:
         """Clear the in-memory log buffer."""

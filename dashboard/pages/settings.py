@@ -140,6 +140,12 @@ def _general_section(config: GlobalConfig) -> Tuple[Dict[str, Any], List[str]]:
         value=json.dumps(config.shared_state, ensure_ascii=False, indent=2),
         height=140,
     )
+    dependencies_text = st.text_area(
+        "Dipendenze Python (una per riga o JSON)",
+        value="\n".join(config.dependencies),
+        help="Specificare le librerie che il runtime deve installare all'avvio.",
+        height=120,
+    )
 
     env, env_error = _safe_json_dict(env_text, "env", config.env)
     if env_error:
@@ -147,12 +153,16 @@ def _general_section(config: GlobalConfig) -> Tuple[Dict[str, Any], List[str]]:
     shared_state, state_error = _safe_json_dict(shared_state_text, "shared_state", config.shared_state)
     if state_error:
         errors.append(state_error)
+    dependencies, deps_error = _parse_dependencies(dependencies_text, config.dependencies)
+    if deps_error:
+        errors.append(deps_error)
 
     mapping: Dict[str, Any] = {
         "env": env,
         "shared_state": shared_state,
         "max_concurrency": max_concurrency or None,
         "process_pool_size": process_pool or None,
+        "dependencies": dependencies,
     }
     return mapping, errors
 
@@ -218,6 +228,36 @@ def _save_controls(config: GlobalConfig) -> None:
                 st.error(f"Salvataggio fallito: {exc}")
             else:
                 mark_global_config_clean()
+
+
+def _safe_json_dict(text: str, field_name: str, fallback: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+    stripped = text.strip()
+    if not stripped:
+        return {}, None
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        return dict(fallback), f"Il campo '{field_name}' contiene JSON non valido: {exc}"
+    if not isinstance(value, dict):
+        return dict(fallback), f"Il campo '{field_name}' deve essere un oggetto JSON."
+    return value, None
+
+
+def _parse_dependencies(text: str, fallback: List[str]) -> Tuple[List[str], Optional[str]]:
+    stripped = text.strip()
+    if not stripped:
+        return [], None
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        entries = [line.strip() for line in stripped.splitlines() if line.strip()]
+        return entries, None
+    if isinstance(data, (list, tuple, set)):
+        return [str(item).strip() for item in data if str(item).strip()], None
+    if isinstance(data, str):
+        entries = [part.strip() for part in data.replace(",", "\n").splitlines() if part.strip()]
+        return entries, None
+    return list(fallback), "Il campo 'dependencies' deve essere un array JSON, una stringa o righe separate."
                 st.success(f"Configurazione salvata in {path}")
 
 
